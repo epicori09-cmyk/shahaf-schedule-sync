@@ -112,6 +112,25 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn("מורה מחליף", calendar.render())
         self.assertIn("RECURRENCE-ID;TZID=Asia/Jerusalem:20260906T083000", calendar.render())
 
+    def test_time_change_creates_date_scoped_override(self) -> None:
+        calendar = parse_calendar(ICS)
+        changes = reconcile_calendar(
+            calendar,
+            self.snapshot([
+                PublishedChange(
+                    date(2026, 9, 6), 1, "ספרות", "changed", start=time(8, 45), end=time(9, 25)
+                )
+            ]),
+            date(2026, 9, 6),
+            date(2026, 9, 20),
+        )
+        self.assertEqual([change.kind for change in changes], ["changed"])
+        rendered = calendar.render()
+        self.assertIn("DTSTART;TZID=Asia/Jerusalem:20260906T084500", rendered)
+        self.assertIn("DTEND;TZID=Asia/Jerusalem:20260906T092500", rendered)
+        self.assertIn("RECURRENCE-ID;TZID=Asia/Jerusalem:20260906T083000", rendered)
+        self.assertEqual(len(calendar.events[0].exdates()), 0)
+
     def test_reordered_teacher_and_room_are_not_changes(self) -> None:
         calendar = parse_calendar(ICS.replace("DESCRIPTION:מורה: בר סבן", "LOCATION:208 — י״א 8\r\nDESCRIPTION:מורה: בר סבן"))
         changes = reconcile_calendar(
