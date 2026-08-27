@@ -331,12 +331,14 @@ def parse_changes_html(
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
-    if select_match and not re.search(
-        rf"<option\b[^>]*\bvalue=[\"']{re.escape(expected_class_id)}[\"'][^>]*\bselected",
-        select_match.group(1),
-        flags=re.IGNORECASE,
-    ):
-        raise ShahafSourceError(f"Shahaf page is not selected for class {expected_class_id}")
+    if select_match:
+        selected_class = any(
+            re.search(rf"\bvalue=[\"']{re.escape(expected_class_id)}[\"']", attrs, re.IGNORECASE)
+            and re.search(r"\bselected(?:\s*=|\b)", attrs, re.IGNORECASE)
+            for attrs in re.findall(r"<option\b([^>]*)>", select_match.group(1), flags=re.IGNORECASE)
+        )
+        if not selected_class:
+            raise ShahafSourceError(f"Shahaf page is not selected for class {expected_class_id}")
 
     update_match = re.search(
         r"<div[^>]*class=[\"'][^\"']*UpdateDate[^\"']*[\"'][^>]*>(.*?)</div>",
@@ -350,7 +352,7 @@ def parse_changes_html(
     candidates: list[_HtmlNode] = []
     for node in _walk(parser.root):
         classes = _class_value(node)
-        if node.tag == "tr" or re.search(r"change|שינוי", classes, re.IGNORECASE) or any(
+        if node.tag in {"tr", "li", "article"} or re.search(r"change|שינוי", classes, re.IGNORECASE) or any(
             key in node.attrs for key in ("data-date", "data-day", "data-period", "data-hour")
         ):
             candidates.append(node)
