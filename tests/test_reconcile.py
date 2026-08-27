@@ -6,6 +6,7 @@ import unittest
 from shahaf_sync.ics import parse_calendar
 from shahaf_sync.model import PublishedChange, SourceSnapshot
 from shahaf_sync.reconcile import reconcile_calendar
+from shahaf_sync.site import build_schedule
 
 
 ICS = """BEGIN:VCALENDAR\r
@@ -122,6 +123,15 @@ class ReconcileTests(unittest.TestCase):
             date(2026, 9, 6),
         )
         self.assertEqual(changes, [])
+
+    def test_build_schedule_expands_recurring_lesson_for_live_view(self) -> None:
+        calendar = parse_calendar(ICS)
+        schedule = build_schedule(calendar, "2026-09-06", "2026-09-06")
+        self.assertEqual(len(schedule), 1)
+        self.assertEqual(schedule[0]["subject"], "ספרות")
+        self.assertEqual(schedule[0]["start"], "08:30")
+        self.assertEqual(schedule[0]["end"], "09:10")
+        self.assertEqual(schedule[0]["teacher"], "בר סבן")
 
     def test_move_and_added_lesson_are_handled(self) -> None:
         calendar = parse_calendar(ICS)

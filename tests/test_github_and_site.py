@@ -81,9 +81,11 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
-            self.assertIn("הנתונים מסומנים כמיושנים", html)
+            self.assertIn("Data may be stale", html)
             self.assertIn("מתמטיקה", html)
             self.assertIn("2026-08-27T06:30:00+03:00", html)
+            self.assertIn("Right now", html)
+            self.assertIn("scheduleAvailable", html)
             self.assertEqual(data["changes"][0]["kind"], "cancelled")
             self.assertEqual(data["last_successful_sync"], "2026-08-27T06:30:00+03:00")
 

@@ -15,7 +15,7 @@ from .ics import CalendarFormatError, parse_calendar
 from .model import SourceSnapshot
 from .reconcile import ChangeRecord, reconcile_calendar
 from .shahaf import ShahafSourceError, parse_changes_html
-from .site import render_site
+from .site import build_schedule, render_site
 
 
 class SyncFailure(RuntimeError):
@@ -98,6 +98,11 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
         updated_content = calendar.render()
         if updated_content != gist_file.content and not dry_run:
             client.update_file(config.gist_id, config.gist_filename, updated_content)
+        schedule = build_schedule(
+            calendar,
+            current.date().isoformat(),
+            (current.date() + timedelta(days=config.lookahead_days)).isoformat(),
+        )
         render_site(
             site_path,
             title=config.site_title,
@@ -107,6 +112,7 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             changes=changes,
             stale=False,
             last_successful_sync=current.isoformat(),
+            schedule=schedule,
         )
         print(f"Sync complete: {len(changes)} change(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes
