@@ -1,0 +1,58 @@
+name: Shahaf schedule sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * *"
+      timezone: "Asia/Jerusalem"
+    - cron: "30 7 * * *"
+      timezone: "Asia/Jerusalem"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: shahaf-schedule-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out automation
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run Shahaf sync
+        id: sync
+        continue-on-error: true
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: PYTHONPATH=src python -m shahaf_sync --config config.json
+
+      - name: Upload Pages artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy Pages site
+        id: deployment
+        if: always()
+        uses: actions/deploy-pages@v4
+
+      - name: Fail workflow when sync failed
+        if: steps.sync.outcome == 'failure'
+        run: exit 1

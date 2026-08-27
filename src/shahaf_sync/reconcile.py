@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 import hashlib
 import re
 
-from .ics import Calendar, IcsEvent, format_datetime, unescape
-from .model import Lesson, SourceSnapshot
+from .ics import Calendar, IcsEvent, unescape
+from .model import Lesson, PublishedChange, SourceSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +20,12 @@ class ChangeRecord:
 
 def subject_key(value: str) -> str:
     value = re.sub(r"(?:—|-)?\s*(?:שעה|hour)\s*\d+\s*$", "", value, flags=re.IGNORECASE)
+    tokens = re.findall(r"[\w]+", value.casefold(), flags=re.UNICODE)
+    return " ".join(sorted(tokens))
+
+
+def _detail_key(value: str) -> str:
+    """Normalize teacher/room text whose word order is not semantically meaningful."""
     tokens = re.findall(r"[\w]+", value.casefold(), flags=re.UNICODE)
     return " ".join(sorted(tokens))
 
@@ -47,41 +53,94 @@ def _same_details(event: IcsEvent, lesson: Lesson) -> bool:
         subject_key(event.subject) == subject_key(lesson.subject)
         and event.start.time() == lesson.start
         and event.end.time() == lesson.end
-        and _teacher(event).strip() == lesson.teacher.strip()
-        and event.location.strip() == lesson.room.strip()
+        and _detail_key(_teacher(event)) == _detail_key(lesson.teacher)
+        and _detail_key(event.location) == _detail_key(lesson.room)
     )
 
 
-def _compatible_reference(event: IcsEvent, lesson: Lesson) -> bool:
-    teacher = _teacher(event).strip()
-    room = event.location.strip()
-    if teacher and lesson.teacher and teacher == lesson.teacher:
-        return True
-    if room and lesson.room and room == lesson.room:
-        return True
-    return not teacher and not room
+_PERIOD_TIMES: dict[int, tuple[time, time]] = {
+    0: (time(7, 45), time(8, 25)),
+    1: (time(8, 30), time(9, 10)),
+    2: (time(9, 10), time(9, 50)),
+    3: (time(10, 5), time(10, 45)),
+    4: (time(10, 45), time(11, 25)),
+    5: (time(11, 35), time(12, 15)),
+    6: (time(12, 15), time(12, 55)),
+    7: (time(13, 25), time(14, 5)),
+    8: (time(14, 5), time(14, 45)),
+    9: (time(14, 50), time(15, 30)),
+    10: (time(15, 30), time(16, 10)),
+    11: (time(16, 20), time(17, 0)),
+    12: (time(17, 0), time(17, 40)),
+}
 
 
-def _deterministic_uid(lesson: Lesson) -> str:
-    material = "|".join(
-        [lesson.date.isoformat(), str(lesson.period), subject_key(lesson.subject), lesson.teacher, lesson.room]
-    )
+def _find_base_event(
+    calendar: Calendar, change: PublishedChange
+) -> tuple[IcsEvent, datetime] | None:
+    start = datetime.combine(change.date, time.min)
+    end = datetime.combine(change.date, time.max)
+    candidates: list[tuple[IcsEvent, datetime]] = []
+    for event in calendar.events:
+        if not event.is_recurring or subject_key(event.subject) != subject_key(change.subject):
+            continue
+        for occurrence in event.occurrences(start, end, include_exdates=True):
+            if occurrence.date() == change.date and event.period == change.period:
+                candidates.append((event, occurrence))
+    if not candidates:
+        return None
+
+    def score(item: tuple[IcsEvent, datetime]) -> tuple[int, int, str, str]:
+        event = item[0]
+        teacher = _detail_key(_teacher(event))
+        room = _detail_key(event.location)
+        wanted_teacher = _detail_key(change.teacher or "")
+        wanted_room = _detail_key(change.room or "")
+        return (
+            0 if wanted_teacher and teacher == wanted_teacher else 1,
+            0 if wanted_room and room == wanted_room else 1,
+            event.start.hour * 60 + event.start.minute,
+            event.uid,
+        )
+
+    return sorted(candidates, key=score)[0]
+
+
+def _target_times(change: PublishedChange, event: IcsEvent | None = None) -> tuple[time, time]:
+    target_period = change.new_period or change.period
+    default_times = _PERIOD_TIMES.get(target_period)
+    if event is not None and change.new_period is None and change.start is None and change.end is None:
+        return event.start.time(), event.end.time()
+    if default_times is None and (change.start is None or change.end is None):
+        if event is None:
+            raise ValueError(f"No time mapping for Shahaf period {target_period}")
+        return change.start or event.start.time(), change.end or event.end.time()
+    start = change.start or default_times[0]
+    end = change.end or default_times[1]
+    return start, end
+
+
+def _change_detail(change: PublishedChange, fallback: str) -> str:
+    return change.detail or fallback
+
+
+def _generated_uid(change: PublishedChange) -> str:
+    material = "|".join([change.date.isoformat(), str(change.period), subject_key(change.subject)])
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
     return f"auto-{digest}@ostrovsky.shahaf-sync"
 
 
-def _select_candidate(candidates: list[Lesson], event: IcsEvent) -> Lesson:
-    teacher = _teacher(event).strip()
-    room = event.location.strip()
-    return sorted(
-        candidates,
-        key=lambda item: (
-            0 if teacher and item.teacher.strip() == teacher else 1,
-            0 if room and item.room.strip() == room else 1,
-            item.teacher,
-            item.room,
-        ),
-    )[0]
+def _existing_generated_matches(event: IcsEvent, change: PublishedChange) -> bool:
+    start, end = _target_times(change)
+    teacher = change.teacher or ""
+    room = change.room or ""
+    return (
+        event.start.time() == start
+        and event.end.time() == end
+        and subject_key(event.subject) == subject_key(change.subject)
+        and _detail_key(_teacher(event)) == _detail_key(teacher)
+        and _detail_key(event.location) == _detail_key(room)
+    )
 
 
 def reconcile_calendar(
@@ -90,122 +149,81 @@ def reconcile_calendar(
     window_start: date,
     window_end: date,
 ) -> list[ChangeRecord]:
-    """Apply only dates covered by a complete, timestamped source snapshot."""
-    if not snapshot.covered_dates:
+    """Apply only explicit, date-scoped changes published by Shahaf.
+
+    Absence from the changes feed is deliberately not interpreted as a
+    cancellation. This is what keeps an empty or partial feed from deleting a
+    whole personal schedule.
+    """
+    if not snapshot.changes:
         return []
-    by_slot: dict[tuple[date, int], list[Lesson]] = {}
-    by_date_subject: dict[tuple[date, str], list[Lesson]] = {}
-    for lesson in snapshot.lessons:
-        by_slot.setdefault((lesson.date, lesson.period), []).append(lesson)
-        by_date_subject.setdefault((lesson.date, subject_key(lesson.subject)), []).append(lesson)
-
-    base_events = [event for event in calendar.events if event.is_recurring]
     changes: list[ChangeRecord] = []
-    handled_source_ids: set[int] = set()
-    baseline_subjects = {subject_key(event.subject) for event in base_events}
-
-    for event in base_events:
-        for occurrence in event.occurrences(
-            datetime.combine(window_start, time.min),
-            datetime.combine(window_end, time.max),
-            include_exdates=True,
-        ):
-            occurrence_date = occurrence.date()
-            if occurrence_date not in snapshot.covered_dates:
+    for change in sorted(snapshot.changes, key=lambda item: (item.date, item.period, item.kind, item.subject)):
+        if not (window_start <= change.date <= window_end):
+            continue
+        base = _find_base_event(calendar, change)
+        if change.kind == "cancelled":
+            if base is None:
                 continue
-            period = event.period
-            if period is None:
-                continue
-            candidates = [
-                item
-                for item in by_slot.get((occurrence_date, period), [])
-                if subject_key(item.subject) == subject_key(event.subject)
-            ]
-            moved_candidates = by_date_subject.get((occurrence_date, subject_key(event.subject)), [])
-            selected = _select_candidate(candidates, event) if candidates else None
-            if selected is None and moved_candidates:
-                selected = min(
-                    moved_candidates,
-                    key=lambda item: (abs(item.period - period), item.period, item.teacher, item.room),
-                )
-            if selected is not None:
-                handled_source_ids.add(id(selected))
-                if occurrence in event.auto_exdates():
-                    event.remove_auto_exdate(occurrence)
-                    changes.append(ChangeRecord("restored", occurrence_date, period, event.subject, "source restored the lesson"))
-                existing_override = next(
-                    (
-                        item
-                        for item in calendar.events
-                        if item.uid == event.uid and item.recurrence_id == occurrence
-                    ),
-                    None,
-                )
-                if not _same_details(event, selected) or selected.period != period:
-                    already_current = existing_override is not None and _same_details(existing_override, selected)
-                    if not already_current:
-                        calendar.add_override(
-                            event,
-                            occurrence,
-                            datetime.combine(selected.date, selected.start),
-                            datetime.combine(selected.date, selected.end),
-                            _summary(selected.subject, selected.period),
-                            _description(selected),
-                            selected.room,
-                        )
-                        changes.append(
-                            ChangeRecord("changed", occurrence_date, period, selected.subject, f"updated to period {selected.period}")
-                        )
-                elif existing_override is not None and existing_override.get("X-SHAHAF-AUTO") == "1":
-                    calendar.remove_auto_override(event.uid, occurrence)
-                    changes.append(ChangeRecord("restored", occurrence_date, period, event.subject, "source matches the base schedule"))
-                continue
-
-            if len(moved_candidates) > 1:
-                continue
+            event, occurrence = base
+            calendar.remove_auto_override(event.uid, occurrence)
             if occurrence not in event.exdates():
-                calendar.remove_auto_override(event.uid, occurrence)
                 event.add_exdate(occurrence, automatic=True)
-                changes.append(ChangeRecord("cancelled", occurrence_date, period, event.subject, "no matching lesson published"))
+            changes.append(ChangeRecord("cancelled", change.date, change.period, change.subject, _change_detail(change, "published cancellation")))
+            continue
 
-    for lesson in snapshot.lessons:
-        if id(lesson) in handled_source_ids or not (window_start <= lesson.date <= window_end):
+        if change.kind == "added":
+            start, end = _target_times(change)
+            uid = _generated_uid(change)
+            existing = next((item for item in calendar.events if item.uid == uid), None)
+            if existing is None or not _existing_generated_matches(existing, change):
+                generated_lesson = Lesson(
+                    change.date,
+                    change.period,
+                    start,
+                    end,
+                    change.subject,
+                    change.teacher or "",
+                    change.room or "",
+                )
+                calendar.add_generated_event(
+                    uid,
+                    datetime.combine(change.date, start),
+                    datetime.combine(change.date, end),
+                    _summary(change.subject, change.period),
+                    _description(generated_lesson),
+                    change.room or "",
+                )
+            changes.append(ChangeRecord("added", change.date, change.period, change.subject, _change_detail(change, "published added lesson")))
             continue
-        key = subject_key(lesson.subject)
-        if key not in baseline_subjects or lesson.date not in snapshot.covered_dates:
+
+        if base is None:
             continue
-        references = [event for event in base_events if subject_key(event.subject) == key]
-        if not any(_compatible_reference(event, lesson) for event in references):
-            continue
-        uid = _deterministic_uid(lesson)
-        if any(event.uid == uid for event in calendar.events):
-            continue
-        calendar.add_generated_event(
-            uid,
-            datetime.combine(lesson.date, lesson.start),
-            datetime.combine(lesson.date, lesson.end),
-            _summary(lesson.subject, lesson.period),
-            _description(lesson),
-            lesson.room,
+        event, occurrence = base
+        if occurrence in event.auto_exdates():
+            event.remove_auto_exdate(occurrence)
+        target_period = change.new_period or change.period
+        start, end = _target_times(change, event)
+        teacher = change.teacher if change.teacher is not None else _teacher(event)
+        room = change.room if change.room is not None else event.location
+        target = Lesson(change.date, target_period, start, end, change.subject, teacher, room)
+        existing_override = next(
+            (item for item in calendar.events if item.uid == event.uid and item.recurrence_id == occurrence),
+            None,
         )
-        changes.append(ChangeRecord("added", lesson.date, lesson.period, lesson.subject, "new published lesson"))
-
-    source_keys = {
-        (item.date, item.period, subject_key(item.subject))
-        for item in snapshot.lessons
-        if item.date in snapshot.covered_dates
-    }
-    for event in list(calendar.events):
-        if event.get("X-SHAHAF-AUTO") != "1" or event.recurrence_id or event.is_recurring:
+        if existing_override is None and _same_details(event, target):
             continue
-        if not (window_start <= event.start.date() <= window_end):
-            continue
-        period = event.period
-        if period is None:
-            continue
-        key = (event.start.date(), period, subject_key(event.subject))
-        if event.start.date() in snapshot.covered_dates and key not in source_keys:
-            calendar.remove_auto_event(event.uid)
-            changes.append(ChangeRecord("removed", event.start.date(), period, event.subject, "no longer published"))
+        if existing_override is None or not _same_details(existing_override, target):
+            calendar.add_override(
+                event,
+                occurrence,
+                datetime.combine(change.date, start),
+                datetime.combine(change.date, end),
+                _summary(change.subject, target_period),
+                _description(target),
+                room,
+            )
+        detail = _change_detail(change, f"updated to period {target_period}")
+        changes.append(ChangeRecord("changed", change.date, change.period, change.subject, detail))
 
     return sorted(changes, key=lambda item: (item.date, item.period, item.kind, item.subject))

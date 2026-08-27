@@ -161,7 +161,20 @@ class IcsEvent:
 
     @property
     def subject(self) -> str:
-        return re.sub(r"\s*[—-]\s*(?:שעה|hour)\s*\d+\s*$", "", self.summary, flags=re.IGNORECASE).strip()
+        value = re.sub(
+            r"\s*[—-]\s*(?:שעה|hour)\s*\d+\s*$",
+            "",
+            self.summary,
+            flags=re.IGNORECASE,
+        ).strip()
+        teacher = ""
+        for line in self.description.splitlines():
+            if line.strip().startswith("מורה:"):
+                teacher = line.split(":", 1)[1].strip()
+                break
+        if teacher:
+            value = re.sub(rf"\s*[—-]\s*{re.escape(teacher)}\s*$", "", value).strip()
+        return value
 
     @property
     def is_recurring(self) -> bool:

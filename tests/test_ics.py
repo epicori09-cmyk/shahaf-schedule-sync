@@ -36,6 +36,11 @@ class IcsTests(unittest.TestCase):
         self.assertEqual(calendar.render(), ICS)
         self.assertEqual(len(calendar.events), 1)
         self.assertEqual(calendar.events[0].uid, "lesson-1@example")
+        self.assertEqual(calendar.events[0].subject, "ספרות")
+
+    def test_subject_normalization_handles_teacher_in_summary(self) -> None:
+        text = ICS.replace("SUMMARY:ספרות — שעה 1", "SUMMARY:ספרות — בר סבן — שעה 1")
+        self.assertEqual(parse_calendar(text).events[0].subject, "ספרות")
 
     def test_expands_weekly_series_and_excludes_dates(self) -> None:
         event = parse_calendar(ICS).events[0]

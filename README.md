@@ -1,0 +1,37 @@
+# Shahaf Schedule Sync
+
+Daily, fail-closed synchronization from Ostrovsky’s public Shahaf timetable into a personal ICS Gist and a readable GitHub Pages site.
+
+## Source and target
+
+- Shahaf source: `https://ostrovsky.shahaf.site/?cls=17&tab=changes`
+- Class: `י״א 8` (`cls=17`)
+- Target Gist: `836addbd40d40e1c1332f74f48b829b2`, file `school.ics`
+- iPhone subscription URL: `https://gist.githubusercontent.com/oreomans21/836addbd40d40e1c1332f74f48b829b2/raw/school.ics`
+
+The unpinned URL is important: a revision-pinned raw URL will not follow future Gist updates.
+
+The sync reads only Shahaf's explicit, date-specific changes feed. It does not
+compare the whole-school timetable, which contains parallel major groups and
+would create false cancellations for a personal calendar. An empty changes
+feed is a successful no-op; an unknown non-empty schema is a safe failure.
+
+## GitHub setup
+
+1. Create a GitHub repository and copy this directory into it.
+2. Add a fine-grained personal access token as repository secret `GIST_TOKEN`. Give it only **Gists: write** permission.
+3. Enable GitHub Pages with **GitHub Actions** as the source.
+4. Run **Shahaf schedule sync → Run workflow** once. The workflow then runs at 06:30 and 07:30 Israel time.
+
+The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
+
+## Local verification
+
+```powershell
+$env:PYTHONPATH = 'src'
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+python -m shahaf_sync --dry-run
+```
+
+The dry run reads the live public source and Gist but does not call the Gist update endpoint.
