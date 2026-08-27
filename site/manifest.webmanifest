@@ -1,0 +1,20 @@
+{
+  "name": "המערכת שלי · אוסטרובסקי י״א 8",
+  "short_name": "המערכת שלי",
+  "description": "לוח שינויים מסונכרן לכיתה י״א 8",
+  "lang": "he",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f8f5",
+  "theme_color": "#10233f",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
