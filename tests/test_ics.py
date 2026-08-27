@@ -40,7 +40,7 @@ class IcsTests(unittest.TestCase):
     def test_expands_weekly_series_and_excludes_dates(self) -> None:
         event = parse_calendar(ICS).events[0]
         occurrences = event.occurrences(
-            datetime(2026, 9, 6), datetime(2026, 9, 27)
+            datetime(2026, 9, 6), datetime(2026, 9, 27, 23, 59)
         )
         self.assertEqual(
             [item.date() for item in occurrences],

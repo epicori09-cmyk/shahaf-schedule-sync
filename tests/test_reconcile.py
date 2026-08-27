@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time
 import unittest
 
 from shahaf_sync.ics import parse_calendar
@@ -46,6 +46,20 @@ class ReconcileTests(unittest.TestCase):
         )
         self.assertEqual([change.kind for change in changes], ["cancelled"])
         self.assertIn("20260906T083000", calendar.render())
+
+    def test_cancellation_is_limited_to_one_recurring_occurrence(self) -> None:
+        calendar = parse_calendar(ICS)
+        reconcile_calendar(
+            calendar,
+            self.snapshot([], {date(2026, 9, 6)}),
+            date(2026, 9, 6),
+            date(2026, 9, 20),
+        )
+        event = calendar.events[0]
+        occurrences = event.occurrences(
+            datetime(2026, 9, 6), datetime(2026, 9, 20, 23, 59)
+        )
+        self.assertEqual([item.date() for item in occurrences], [date(2026, 9, 13), date(2026, 9, 20)])
 
     def test_teacher_or_room_change_creates_override(self) -> None:
         calendar = parse_calendar(ICS)
