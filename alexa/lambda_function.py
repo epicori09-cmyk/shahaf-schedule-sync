@@ -54,6 +54,27 @@ def next_lesson(data: dict) -> tuple[datetime, dict] | None:
     return min(candidates, key=lambda pair: pair[0]) if candidates else None
 
 
+def first_lesson_of_next_school_day(data: dict) -> tuple[datetime, dict] | None:
+    now = datetime.now(ZONE)
+    candidates = []
+    for item in data["schedule"]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start = datetime.fromisoformat(f"{item['date']}T{item['start']}:00").replace(tzinfo=ZONE)
+            datetime.fromisoformat(f"{item['date']}T{item['end']}:00")
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start.date() < now.date():
+            continue
+        candidates.append((start, item))
+    if not candidates:
+        return None
+    first_date = min(start.date() for start, _ in candidates)
+    same_day = [(start, item) for start, item in candidates if start.date() == first_date]
+    return min(same_day, key=lambda pair: pair[0])
+
+
 def reminder_payload(wake_at: datetime, lesson: dict) -> dict:
     subject = str(lesson.get("subject") or "your first lesson")
     start = str(lesson.get("start") or "the start time")
@@ -115,7 +136,7 @@ def lambda_handler(event: dict, context: object) -> dict:
 
     try:
         data = fetch_schedule()
-        lesson_info = next_lesson(data)
+        lesson_info = first_lesson_of_next_school_day(data) if intent == "SetWakeUpIntent" else next_lesson(data)
         if lesson_info is None:
             return response("There are no upcoming lessons in the confirmed schedule.", should_end=True)
         lesson_start, lesson = lesson_info
