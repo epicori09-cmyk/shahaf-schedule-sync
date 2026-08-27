@@ -1,0 +1,32 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "my school schedule",
+      "intents": [
+        {
+          "name": "SetWakeUpIntent",
+          "samples": [
+            "set my school wake up",
+            "set my wake up for school",
+            "create my school reminder",
+            "refresh my school wake up"
+          ]
+        },
+        {
+          "name": "NextLessonIntent",
+          "samples": [
+            "when should I wake up",
+            "what is my next lesson",
+            "what time is my first lesson",
+            "tell me my school schedule"
+          ]
+        },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.FallbackIntent", "samples": [] }
+      ],
+      "types": []
+    }
+  }
+}

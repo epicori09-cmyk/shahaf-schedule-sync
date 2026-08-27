@@ -25,6 +25,15 @@ feed is a successful no-op; an unknown non-empty schema is a safe failure.
 
 The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
 
+## Alexa wake-up reminder
+
+The optional Alexa integration is documented in [`alexa/README.md`](alexa/README.md).
+It uses the public `site/data.json` schedule and a 75-minute preparation buffer.
+The GitHub workflow updates Alexa only when `ALEXA_LWA_ACCESS_TOKEN` is present;
+otherwise that step safely skips. Create the first managed reminder from the
+Alexa skill before enabling the repository secret. Keep the existing iPhone
+alarm until the Echo reminder has been tested.
+
 ## Local verification
 
 ```powershell

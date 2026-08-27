@@ -42,6 +42,15 @@ jobs:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: PYTHONPATH=src python -m shahaf_sync --config config.json
 
+      - name: Update Alexa wake-up reminder
+        if: steps.sync.outcome == 'success'
+        continue-on-error: true
+        env:
+          ALEXA_API_ENDPOINT: ${{ secrets.ALEXA_API_ENDPOINT }}
+          ALEXA_LWA_ACCESS_TOKEN: ${{ secrets.ALEXA_LWA_ACCESS_TOKEN }}
+          SCHEDULE_DATA_URL: https://epicori09-cmyk.github.io/shahaf-schedule-sync/data.json
+        run: PYTHONPATH=src python scripts/update_alexa_reminder.py
+
       - name: Upload Pages artifact
         if: always()
         uses: actions/upload-pages-artifact@v3

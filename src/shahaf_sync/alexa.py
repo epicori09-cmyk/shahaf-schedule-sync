@@ -82,9 +82,11 @@ def build_wake_plan(data: dict[str, Any], now: datetime, *, timezone_name: str =
 
     local_now = now.astimezone(zone)
     candidates: list[tuple[date, time, dict[str, Any]]] = []
+    invalid_item = False
     try:
         for item in raw_schedule:
             if not _valid_lesson(item):
+                invalid_item = True
                 continue
             lesson_date = date.fromisoformat(item["date"])
             lesson_time = _lesson_time(item)
@@ -96,6 +98,8 @@ def build_wake_plan(data: dict[str, Any], now: datetime, *, timezone_name: str =
     except (TypeError, ValueError):
         return _default_plan(now, zone)
 
+    if invalid_item:
+        return _default_plan(now, zone)
     if not candidates:
         return None
 
@@ -118,9 +122,9 @@ def build_reminder_payload(plan: WakePlan, *, timezone_name: str = "Asia/Jerusal
     if request_at.tzinfo is None:
         raise ValueError("request_time must be timezone-aware")
     if plan.first_subject:
-        lesson_text = f"Wake up. Your first lesson is {plan.first_subject} at {plan.first_start.strftime('%H:%M')}"
+        lesson_text = f"School schedule wake-up. Your first lesson is {plan.first_subject} at {plan.first_start.strftime('%H:%M')}"
     else:
-        lesson_text = "Wake up for school. Your schedule could not be confirmed, so this is the default wake-up time."
+        lesson_text = "School schedule wake-up. Your schedule could not be confirmed, so this is the default wake-up time."
     return {
         "requestTime": request_at.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "trigger": {
@@ -162,3 +166,39 @@ def send_reminder_request(endpoint: str, access_token: str, plan: WakePlan, *, a
             return json.loads(body) if body else {}
     except (HTTPError, URLError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AlexaApiError(f"Alexa reminder request failed: {exc}") from exc
+
+
+def list_reminders(endpoint: str, access_token: str) -> list[dict[str, Any]]:
+    if not endpoint.startswith("https://"):
+        raise AlexaApiError("Alexa endpoint must use HTTPS")
+    if not access_token:
+        raise AlexaApiError("Alexa access token is required")
+    request = Request(
+        endpoint.rstrip("/") + "/v1/alerts/reminders",
+        method="GET",
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            reminders = body.get("alerts", body) if isinstance(body, dict) else body
+            if not isinstance(reminders, list):
+                raise AlexaApiError("Alexa returned an invalid reminders list")
+            return reminders
+    except (HTTPError, URLError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AlexaApiError(f"Alexa reminder list request failed: {exc}") from exc
+
+
+def delete_reminder(endpoint: str, access_token: str, alert_token: str) -> None:
+    if not alert_token:
+        raise AlexaApiError("Alexa reminder token is required")
+    request = Request(
+        endpoint.rstrip("/") + f"/v1/alerts/reminders/{alert_token}",
+        method="DELETE",
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=20):
+            return
+    except (HTTPError, URLError) as exc:
+        raise AlexaApiError(f"Alexa reminder delete failed: {exc}") from exc
