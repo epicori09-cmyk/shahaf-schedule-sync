@@ -6,8 +6,8 @@ Daily, fail-closed synchronization from Ostrovsky’s public Shahaf timetable in
 
 - Shahaf source: `https://ostrovsky.shahaf.site/?cls=17&tab=changes`
 - Class: `י״א 8` (`cls=17`)
-- Target Gist: `836addbd40d40e1c1332f74f48b829b2`, file `school.ics`
-- iPhone subscription URL: `https://gist.githubusercontent.com/oreomans21/836addbd40d40e1c1332f74f48b829b2/raw/school.ics`
+- Target Gist: `a5891b76daf585d0953bc96958819fdf`, file `school.ics`
+- iPhone subscription URL: `https://gist.githubusercontent.com/epicori09-cmyk/a5891b76daf585d0953bc96958819fdf/raw/school.ics`
 
 The unpinned URL is important: a revision-pinned raw URL will not follow future Gist updates.
 
