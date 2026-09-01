@@ -27,6 +27,21 @@ The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf
 
 The site has two views: **Now** shows the current and next lesson, while **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
 
+## Screenshot timetable migration
+
+The recurring timetable in the Gist was rebuilt from the supplied Shahaf
+screenshots, including the moved teachers, periods, rooms, and gaps. The
+migration keeps the existing special one-off records and date exclusions. To
+inspect it without writing, run:
+
+```powershell
+$env:PYTHONPATH = 'src'
+python scripts/migrate_photo_schedule.py --config config.json
+```
+
+The live migration is intentionally explicit; add `--write` only when you want
+to patch the configured Gist. GitHub Gist history provides the rollback point.
+
 ## Alexa wake-up reminder
 
 The optional Alexa integration is documented in [`alexa/README.md`](alexa/README.md).
