@@ -25,6 +25,8 @@ feed is a successful no-op; an unknown non-empty schema is a safe failure.
 
 The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
 
+The site has two views: **Now** shows the current and next lesson, while **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
+
 ## Alexa wake-up reminder
 
 The optional Alexa integration is documented in [`alexa/README.md`](alexa/README.md).

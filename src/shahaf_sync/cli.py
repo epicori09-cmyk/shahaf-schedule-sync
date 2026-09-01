@@ -113,6 +113,7 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             stale=False,
             last_successful_sync=current.isoformat(),
             schedule=schedule,
+            now=current,
         )
         print(f"Sync complete: {len(changes)} change(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes
@@ -128,6 +129,7 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             stale=True,
             last_successful_sync=str(previous.get("last_successful_sync", "")),
             error=message,
+            now=current,
         )
         print(f"SAFE FAILURE: {message}")
         raise SyncFailure(message) from exc
