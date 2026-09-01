@@ -37,14 +37,16 @@ END:VCALENDAR\r
 
 class PhotoScheduleTests(unittest.TestCase):
     def test_photo_timetable_contains_the_two_sport_corrections(self) -> None:
-        self.assertEqual(len(PHOTO_WEEKLY_SCHEDULE), 50)
+        self.assertEqual(len(PHOTO_WEEKLY_SCHEDULE), 48)
         self.assertIn((6, 2, "חינוך גופני", "יונתן דנישבסקי", ""), PHOTO_WEEKLY_SCHEDULE)
         self.assertIn((2, 5, "חינוך גופני", "יונתן דנישבסקי", ""), PHOTO_WEEKLY_SCHEDULE)
+        self.assertNotIn((1, 10, "עברית", "לימור חן", "217 — י״א 2"), PHOTO_WEEKLY_SCHEDULE)
+        self.assertNotIn((1, 11, "עברית", "לימור חן", "מקוון אינטרנטי"), PHOTO_WEEKLY_SCHEDULE)
 
     def test_rebuild_replaces_recurring_slots_and_preserves_special_records(self) -> None:
         calendar = rebuild_calendar(parse_calendar(OLD_ICS))
         recurring = [event for event in calendar.events if event.is_recurring]
-        self.assertEqual(len(recurring), 50)
+        self.assertEqual(len(recurring), 48)
         sunday_period_1 = next(event for event in recurring if event.start.weekday() == 6 and event.period == 1)
         self.assertEqual(sunday_period_1.uid, "old-sunday-period-1@example")
         self.assertEqual(sunday_period_1.subject, "עברית")
