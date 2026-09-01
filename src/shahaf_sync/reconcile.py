@@ -6,7 +6,7 @@ import hashlib
 import re
 
 from .ics import Calendar, IcsEvent, unescape
-from .model import Lesson, PublishedChange, SourceSnapshot
+from .model import PERIOD_TIMES, Lesson, PublishedChange, SourceSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,23 +58,6 @@ def _same_details(event: IcsEvent, lesson: Lesson) -> bool:
     )
 
 
-_PERIOD_TIMES: dict[int, tuple[time, time]] = {
-    0: (time(7, 45), time(8, 25)),
-    1: (time(8, 30), time(9, 10)),
-    2: (time(9, 10), time(9, 50)),
-    3: (time(10, 5), time(10, 45)),
-    4: (time(10, 45), time(11, 25)),
-    5: (time(11, 35), time(12, 15)),
-    6: (time(12, 15), time(12, 55)),
-    7: (time(13, 25), time(14, 5)),
-    8: (time(14, 5), time(14, 45)),
-    9: (time(14, 50), time(15, 30)),
-    10: (time(15, 30), time(16, 10)),
-    11: (time(16, 20), time(17, 0)),
-    12: (time(17, 0), time(17, 40)),
-}
-
-
 def _find_base_event(
     calendar: Calendar, change: PublishedChange
 ) -> tuple[IcsEvent, datetime] | None:
@@ -112,7 +95,7 @@ def _find_base_event(
 
 def _target_times(change: PublishedChange, event: IcsEvent | None = None) -> tuple[time, time]:
     target_period = change.new_period or change.period
-    default_times = _PERIOD_TIMES.get(target_period)
+    default_times = PERIOD_TIMES.get(target_period)
     if event is not None and change.new_period is None and change.start is None and change.end is None:
         return event.start.time(), event.end.time()
     if default_times is None and (change.start is None or change.end is None):

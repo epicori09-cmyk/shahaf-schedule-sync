@@ -6,7 +6,7 @@ import unittest
 from shahaf_sync.ics import parse_calendar
 from shahaf_sync.model import PublishedChange, SourceSnapshot
 from shahaf_sync.reconcile import reconcile_calendar
-from shahaf_sync.site import build_schedule
+from shahaf_sync.site import build_day_slots, build_schedule
 
 
 ICS = """BEGIN:VCALENDAR\r
@@ -151,6 +151,33 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(schedule[0]["start"], "08:30")
         self.assertEqual(schedule[0]["end"], "09:10")
         self.assertEqual(schedule[0]["teacher"], "בר סבן")
+
+    def test_build_schedule_resolves_recurrence_override_without_duplicate(self) -> None:
+        calendar = parse_calendar(ICS)
+        reconcile_calendar(
+            calendar,
+            self.snapshot([
+                PublishedChange(
+                    date(2026, 9, 6), 1, "ספרות", "changed", teacher="מורה מחליף"
+                )
+            ]),
+            date(2026, 9, 6),
+            date(2026, 9, 6),
+        )
+        schedule = build_schedule(calendar, "2026-09-06", "2026-09-06")
+        self.assertEqual(len(schedule), 1)
+        self.assertEqual(schedule[0]["teacher"], "מורה מחליף")
+        self.assertEqual(schedule[0]["start"], "08:30")
+
+    def test_build_day_slots_includes_all_periods_and_gaps(self) -> None:
+        calendar = parse_calendar(ICS)
+        schedule = build_schedule(calendar, "2026-09-06", "2026-09-06")
+        slots = build_day_slots(schedule, date(2026, 9, 6))
+        self.assertEqual(len(slots), 14)
+        self.assertEqual(slots[0]["period"], 0)
+        self.assertIsNone(slots[0]["lesson"])
+        self.assertEqual(slots[1]["lesson"]["subject"], "ספרות")
+        self.assertEqual(slots[13]["start"], "17:40")
 
     def test_move_and_added_lesson_are_handled(self) -> None:
         calendar = parse_calendar(ICS)

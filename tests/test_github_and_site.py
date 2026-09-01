@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -88,6 +88,53 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("scheduleAvailable", html)
             self.assertEqual(data["changes"][0]["kind"], "cancelled")
             self.assertEqual(data["last_successful_sync"], "2026-08-27T06:30:00+03:00")
+
+    def test_site_hides_a_change_only_after_its_period_has_finished(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-06T09:11:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[
+                    ChangeRecord("cancelled", date(2026, 9, 6), 1, "Math", "cancelled"),
+                    ChangeRecord("cancelled", date(2026, 9, 6), 2, "English", "cancelled"),
+                ],
+                stale=False,
+                now=datetime(2026, 9, 6, 9, 11, tzinfo=timezone(timedelta(hours=3))),
+            )
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["subject"] for item in data["changes"]], ["English"])
+
+    def test_site_has_full_schedule_control_and_period_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-06T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[
+                    {
+                        "date": "2026-09-06",
+                        "period": 1,
+                        "subject": "ספרות",
+                        "teacher": "בר סבן",
+                        "room": "208",
+                        "start": "08:30",
+                        "end": "09:10",
+                    }
+                ],
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertIn("Full schedule", html)
+            self.assertIn("schedule-periods", html)
+            self.assertIn("Free period", html)
+            self.assertEqual(len(data["periods"]), 14)
 
 
 if __name__ == "__main__":
