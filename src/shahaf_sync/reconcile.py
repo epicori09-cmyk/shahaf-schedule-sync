@@ -82,7 +82,11 @@ def _find_base_event(
     end = datetime.combine(change.date, time.max)
     candidates: list[tuple[IcsEvent, datetime]] = []
     for event in calendar.events:
-        if not event.is_recurring or subject_key(event.subject) != subject_key(change.subject):
+        if not event.is_recurring:
+            continue
+        if change.subject and subject_key(event.subject) != subject_key(change.subject):
+            continue
+        if not change.subject and change.teacher and _detail_key(_teacher(event)) != _detail_key(change.teacher):
             continue
         for occurrence in event.occurrences(start, end, include_exdates=True):
             if occurrence.date() == change.date and event.period == change.period:
@@ -169,7 +173,7 @@ def reconcile_calendar(
             calendar.remove_auto_override(event.uid, occurrence)
             if occurrence not in event.exdates():
                 event.add_exdate(occurrence, automatic=True)
-            changes.append(ChangeRecord("cancelled", change.date, change.period, change.subject, _change_detail(change, "published cancellation")))
+            changes.append(ChangeRecord("cancelled", change.date, change.period, change.subject or event.subject, _change_detail(change, "published cancellation")))
             continue
 
         if change.kind == "added":
@@ -200,13 +204,14 @@ def reconcile_calendar(
         if base is None:
             continue
         event, occurrence = base
+        subject = change.subject or event.subject
         if occurrence in event.auto_exdates():
             event.remove_auto_exdate(occurrence)
         target_period = change.new_period or change.period
         start, end = _target_times(change, event)
         teacher = change.teacher if change.teacher is not None else _teacher(event)
         room = change.room if change.room is not None else event.location
-        target = Lesson(change.date, target_period, start, end, change.subject, teacher, room)
+        target = Lesson(change.date, target_period, start, end, subject, teacher, room)
         existing_override = next(
             (item for item in calendar.events if item.uid == event.uid and item.recurrence_id == occurrence),
             None,
@@ -219,11 +224,11 @@ def reconcile_calendar(
                 occurrence,
                 datetime.combine(change.date, start),
                 datetime.combine(change.date, end),
-                _summary(change.subject, target_period),
+                _summary(subject, target_period),
                 _description(target),
                 room,
             )
         detail = _change_detail(change, f"updated to period {target_period}")
-        changes.append(ChangeRecord("changed", change.date, change.period, change.subject, detail))
+        changes.append(ChangeRecord("changed", change.date, change.period, subject, detail))
 
     return sorted(changes, key=lambda item: (item.date, item.period, item.kind, item.subject))

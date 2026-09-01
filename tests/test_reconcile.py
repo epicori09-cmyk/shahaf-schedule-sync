@@ -178,6 +178,15 @@ class ReconcileTests(unittest.TestCase):
         )
         self.assertEqual(changes, [])
 
+    def test_teacher_only_cancellation_matches_one_personal_lesson(self) -> None:
+        calendar = parse_calendar(MATH_ICS.replace("מורה: אפי כהן", "מורה: שמרת מן"))
+        snapshot = self.snapshot(
+            [PublishedChange(date(2026, 9, 1), 1, "", "cancelled", teacher="מן שמרת")]
+        )
+        changes = reconcile_calendar(calendar, snapshot, date(2026, 9, 1), date(2026, 9, 21))
+        self.assertEqual([change.kind for change in changes], ["cancelled"])
+        self.assertEqual(changes[0].subject, "מתמטיקה")
+
     def test_explicit_changes_do_not_cancel_unmentioned_events(self) -> None:
         calendar = parse_calendar(ICS)
         changes = reconcile_calendar(

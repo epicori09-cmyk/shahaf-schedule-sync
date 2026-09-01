@@ -50,6 +50,14 @@ CHANGES_HTML = """<!doctype html>
 </body></html>"""
 
 
+NEW_CHANGES_HTML = """<!doctype html>
+<html><body>
+<select name="cls"><option value="17" selected="selected">י״א - 8</option></select>
+<div class="UpdateDate">מעודכן ל: 01.09.2026, שעה: 15:20</div>
+<ul><li class="ChangesInfo">01.09.2026, שיעור 1, מן שמרת, ביטול שעור</li></ul>
+</body></html>"""
+
+
 class ShahafParserTests(unittest.TestCase):
     def test_parses_dates_periods_lessons_and_update_timestamp(self) -> None:
         snapshot = parse_timetable_html(HTML, reference_date=date(2026, 9, 1))
@@ -95,6 +103,16 @@ class ShahafParserTests(unittest.TestCase):
         unknown += '<div class="UnexpectedThing">02.09.2026 שעה 1 מתמטיקה בוטל</div></body></html>'
         with self.assertRaises(ShahafSourceError):
             parse_changes_html(unknown, reference_date=date(2026, 9, 1))
+
+    def test_parses_current_changes_list_rows_with_teacher_and_cancellation(self) -> None:
+        snapshot = parse_changes_html(NEW_CHANGES_HTML, reference_date=date(2026, 9, 1))
+        self.assertEqual(len(snapshot.changes), 1)
+        change = snapshot.changes[0]
+        self.assertEqual(change.date, date(2026, 9, 1))
+        self.assertEqual(change.period, 1)
+        self.assertEqual(change.teacher, "מן שמרת")
+        self.assertEqual(change.kind, "cancelled")
+        self.assertEqual(change.subject, "")
 
 
 if __name__ == "__main__":

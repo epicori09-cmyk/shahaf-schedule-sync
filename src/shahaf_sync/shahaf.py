@@ -116,26 +116,41 @@ def _parse_published_change(node: _HtmlNode, reference_date: date) -> PublishedC
     if change_date is None:
         return None
 
+    teacher_only_row = "changesinfo" in _class_value(node)
+    teacher_only_match = re.search(
+        r"(?:שיעור|lesson)\s*(\d+)\s*,\s*([^,]+?)\s*,\s*(.+)$",
+        text,
+        re.IGNORECASE,
+    ) if teacher_only_row else None
+
     period_value = _attr(node, "period", "hour") or _descendant_value(node, ("period", "hour"))
     period_match = re.search(r"\d+", period_value)
     if period_match is not None:
         period = int(period_match.group(0))
     else:
-        period_match = re.search(r"(?:שעה|hour|period)\s*[:#-]?\s*(\d+)", text, re.IGNORECASE)
+        period_match = re.search(r"(?:שעה|שיעור|hour|period)\s*[:#-]?\s*(\d+)", text, re.IGNORECASE)
         if period_match is None:
             return None
         period = int(period_match.group(1))
+
+    if teacher_only_match:
+        subject = ""
+        teacher = teacher_only_match.group(2).strip()
+        action_text = teacher_only_match.group(3).strip()
+    else:
+        teacher = None
+        action_text = ""
 
     subject = (
         _attr(node, "subject", "lesson", "activity")
         or _descendant_value(node, ("subject", "lesson", "activity", "course"))
         or _first_tag_value(node, "b")
-    )
-    if not subject:
+    ) if not teacher_only_match else subject
+    if not subject and not teacher_only_match:
         labeled = re.search(r"(?:מקצוע|שיעור|פעילות|subject|lesson)\s*[:#-]\s*([^|;]+)", text, re.IGNORECASE)
         subject = labeled.group(1).strip() if labeled else ""
     subject = re.sub(r"\s+", " ", subject).strip(" -:;")
-    if not subject:
+    if not subject and not teacher_only_match:
         return None
 
     kind_value = (_attr(node, "kind", "action", "type") or text).casefold()
@@ -161,7 +176,7 @@ def _parse_published_change(node: _HtmlNode, reference_date: date) -> PublishedC
         match = re.search(r"\b(\d{1,2}):(\d{2})\b", value)
         return time(int(match.group(1)), int(match.group(2))) if match else None
 
-    teacher = _attr(node, "teacher") or _descendant_value(node, ("teacher", "instructor"))
+    teacher = teacher or _attr(node, "teacher") or _descendant_value(node, ("teacher", "instructor"))
     room = _attr(node, "room", "location") or _descendant_value(node, ("room", "location"))
     if not teacher:
         teacher_match = re.search(r"(?:מורה(?:\s+מחליף)?|teacher)\s*[:#-]\s*([^|;]+)", text, re.IGNORECASE)
