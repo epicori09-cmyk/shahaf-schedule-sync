@@ -134,6 +134,9 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("Full schedule", html)
             self.assertIn("schedule-periods", html)
             self.assertIn("Free period", html)
+            self.assertIn('touchstart', html)
+            self.assertIn('touchend', html)
+            self.assertIn('Math.abs(dx)', html)
             self.assertEqual(len(data["periods"]), 14)
 
 

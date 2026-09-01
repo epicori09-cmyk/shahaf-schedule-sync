@@ -222,8 +222,8 @@ def render_site(
 <title>{escape(title)}</title>
 <style>
 :root{{color-scheme:light;--paper:#f4f6f3;--card:#ffffff;--ink:#142b35;--muted:#71818a;--line:#dfe7e4;--green:#0c806d;--green-soft:#d9f0e9;--red:#c85652;--red-soft:#fae6e4;--blue:#3869bd;--shadow:0 14px 35px #142b3512}}
-*{{box-sizing:border-box}}html{{background:var(--paper)}}body{{margin:0;min-height:100vh;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;line-height:1.4;-webkit-font-smoothing:antialiased;padding-bottom:env(safe-area-inset-bottom)}}
-.app{{width:calc(100% - 28px);max-width:620px;margin:0 auto;padding:max(18px,env(safe-area-inset-top)) 0 34px}}
+*{{box-sizing:border-box}}html{{background:var(--paper);overscroll-behavior-x:none}}body{{margin:0;min-height:100vh;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;line-height:1.4;-webkit-font-smoothing:antialiased;padding-bottom:env(safe-area-inset-bottom)}}
+.app{{width:calc(100% - 28px);max-width:620px;margin:0 auto;padding:max(18px,env(safe-area-inset-top)) 0 34px;touch-action:pan-y}}
 .topbar{{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}}.identity{{display:flex;align-items:center;gap:11px;color:var(--ink);text-decoration:none}}.mark{{display:grid;place-items:center;width:43px;height:43px;border-radius:14px;background:var(--ink);color:#fff;font-weight:800;font-size:14px;letter-spacing:-.05em}}.identity strong{{display:block;font-size:15px;letter-spacing:-.02em}}.identity small{{display:block;color:var(--muted);font-size:12px;margin-top:2px}}.source{{color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:50%;width:40px;height:40px;display:grid;place-items:center;font-size:19px;background:var(--card)}}
 .view-switch{{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;margin-bottom:27px;border:1px solid var(--line);border-radius:14px;background:#eaf0ed}}.view-switch button,.small-button,.day-chip{{font:inherit;border:0;cursor:pointer}}.view-switch button{{min-height:38px;border-radius:10px;background:transparent;color:var(--muted);font-size:13px;font-weight:750}}.view-switch button.is-active{{background:var(--card);color:var(--ink);box-shadow:0 2px 7px #142b3512}}button:focus-visible,.source:focus-visible,.identity:focus-visible{{outline:3px solid #8ecdc0;outline-offset:2px}}
 .status{{display:flex;align-items:center;gap:7px;color:var(--green);font-size:12px;font-weight:750;margin-bottom:11px}}.status-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px var(--green-soft)}}.stale{{color:#9b5b22}}.stale .status-dot{{background:#d18b3e;box-shadow:0 0 0 4px #f7e6ca}}.error{{margin:-2px 0 18px;color:#9b413a;font-size:12px}}.error summary{{cursor:pointer;font-weight:700}}.error pre{{white-space:pre-wrap;background:var(--red-soft);border-radius:10px;padding:10px;margin-top:8px}}
@@ -264,6 +264,24 @@ function renderDayPicker(selected) {{ const picker = document.getElementById("da
 function renderFullDay(targetDate) {{ const dates = scheduleDates(); if (!dates.length) {{ document.getElementById("schedule-periods").innerHTML = `<div class="empty-day">The full schedule will appear after a successful sync.</div>`; return; }} const selected = dates.includes(targetDate) ? targetDate : dates[0]; renderDayPicker(selected); const items = schedule.filter((item) => item.date === selected); const byPeriod = Object.fromEntries(items.map((item) => [item.period, item])); const day = schoolDate(selected); document.getElementById("selected-day-title").textContent = dateFormatter.format(day); document.getElementById("selected-day-summary").textContent = `${{items.length}} lesson${{items.length === 1 ? "" : "s"}} · gaps included`; document.getElementById("schedule-periods").innerHTML = periods.map((slot) => {{ const item = byPeriod[slot.period]; const accent = palette[slot.period % palette.length]; return `<article class="period-row ${{item ? "has-lesson" : "is-gap"}}" style="--slot-accent:${{accent}}"><div class="period-main">${{item ? `<strong>${{escapeHtml(item.subject)}}</strong><span>${{escapeHtml([item.teacher, item.room ? `Room ${{item.room}}` : ""].filter(Boolean).join(" · ") || "Lesson")}}</span>` : `<span class="gap-label">Free period</span><span class="gap-sub">Nothing scheduled</span>`}}</div><div class="period-info"><strong>${{slot.period}}</strong><span>${{formatTime(slot.start)}}<br>– ${{formatTime(slot.end)}}</span></div></article>`; }}).join(""); }}
 function setView(view) {{ const full = view === "full"; document.getElementById("now-view").hidden = full; document.getElementById("full-view").hidden = !full; document.getElementById("changes-view").hidden = full; document.getElementById("now-tab").classList.toggle("is-active", !full); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("now-tab").setAttribute("aria-selected", String(!full)); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); window.scrollTo({{top: 0, behavior: "smooth"}}); }} else {{ window.scrollTo({{top: 0, behavior: "smooth"}}); }} }}
 document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => renderFullDay(nowInSchoolZone().date));
+let swipeStart = null;
+const swipeSurface = document.querySelector(".app");
+swipeSurface.addEventListener("touchstart", (event) => {{
+  if (event.touches.length !== 1 || event.target.closest("button, a, .day-picker")) {{ swipeStart = null; return; }}
+  const touch = event.touches[0];
+  swipeStart = {{ x: touch.clientX, y: touch.clientY }};
+}}, {{ passive: true }});
+swipeSurface.addEventListener("touchend", (event) => {{
+  if (!swipeStart || event.changedTouches.length !== 1) return;
+  const touch = event.changedTouches[0];
+  const dx = touch.clientX - swipeStart.x;
+  const dy = touch.clientY - swipeStart.y;
+  swipeStart = null;
+  if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
+  const fullVisible = !document.getElementById("full-view").hidden;
+  if (dx < 0 && !fullVisible) setView("full");
+  if (dx > 0 && fullVisible) setView("now");
+}}, {{ passive: true }});
 refreshLiveLessons(); setInterval(refreshLiveLessons, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 </script></body></html>
 '''
