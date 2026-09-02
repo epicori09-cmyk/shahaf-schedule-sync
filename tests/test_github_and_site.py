@@ -277,6 +277,7 @@ class GithubAndSiteTests(unittest.TestCase):
             html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             self.assertIn("transit-wake-card", html)
             self.assertIn("Bus", html)
+            self.assertIn("${escapeHtml(leg.from_stop)} ← ${escapeHtml(leg.to_stop)}", html)
             self.assertIn("Earlier buses were considered", html)
 
     def test_wake_data_uses_first_master_lesson_minus_75_minutes(self) -> None:
