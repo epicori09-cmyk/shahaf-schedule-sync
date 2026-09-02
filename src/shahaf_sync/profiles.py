@@ -27,6 +27,12 @@ def _matches(value: str, expected: str) -> bool:
 
 
 def _selector_matches(lesson: Lesson, selector: dict[str, Any]) -> bool:
+    periods = selector.get("periods")
+    weekdays = selector.get("weekdays")
+    if periods and lesson.period not in {int(value) for value in periods}:
+        return False
+    if weekdays and lesson.date.weekday() not in {int(value) for value in weekdays}:
+        return False
     subject = selector.get("subject")
     teacher = selector.get("teacher")
     room = selector.get("room")
@@ -68,6 +74,12 @@ def _change_matches(change: PublishedChange, spec: dict[str, Any]) -> bool:
         return True
     selectors = [item for item in spec.get("selectors", []) if isinstance(item, dict)]
     for selector in selectors:
+        periods = selector.get("periods")
+        weekdays = selector.get("weekdays")
+        if periods and change.period not in {int(value) for value in periods}:
+            continue
+        if weekdays and change.date.weekday() not in {int(value) for value in weekdays}:
+            continue
         subject = str(selector.get("subject", ""))
         teacher = str(selector.get("teacher", ""))
         room = str(selector.get("room", ""))

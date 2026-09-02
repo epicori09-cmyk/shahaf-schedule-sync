@@ -138,11 +138,10 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('touchstart', html)
             self.assertIn('touchend', html)
             self.assertIn('Math.abs(dx)', html)
-            self.assertIn('id="settings-view"', html)
-            self.assertNotIn('id="settings-tab"', html)
-            self.assertIn('profile-select', html)
+            self.assertNotIn('settings-view', html)
+            self.assertNotIn('profile-select', html)
             self.assertIn('skeleton', html)
-            self.assertIn('["now", "full", "exams", "settings"]', html)
+            self.assertIn('["now", "full", "exams"]', html)
             self.assertEqual(len(data["periods"]), 14)
 
     def test_service_worker_caches_data_for_weak_connection(self) -> None:
@@ -170,46 +169,42 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual(data["exams"][0]["reminder_date"], "2026-09-02")
             self.assertTrue(data["exams_available"])
 
-    def test_site_embeds_confirmed_additional_profile_data(self) -> None:
+    def test_site_can_render_ya1_as_an_isolated_pink_page_without_wake(self) -> None:
         with TemporaryDirectory() as directory:
             render_site(
                 Path(directory),
-                title="Schedule",
+                title="Ostrovsky Grade 11-1",
                 generated_at="2026-09-02T14:00:00+03:00",
                 source_url="https://example.invalid",
                 source_updated="fresh",
                 changes=[],
                 stale=False,
-                schedule=[],
-                exams=[],
-                profiles=[
+                schedule=[
                     {
-                        "id": "ya1-physics-cs10",
-                        "label": "יא-1 · Physics + Computer Science 10-point",
-                        "mark": "XI·1",
-                        "schedule": [
-                            {
-                                "date": "2026-09-03",
-                                "period": 0,
-                                "subject": "פיסיקה 1",
-                                "teacher": "שגיא גיא",
-                                "room": "308 מע׳ פיסיקה",
-                                "start": "07:45",
-                                "end": "08:25",
-                            }
-                        ],
-                        "schedule_available": True,
-                        "changes": [],
-                        "exams": [],
-                        "exams_available": True,
+                        "date": "2026-09-03",
+                        "period": 0,
+                        "subject": "פיסיקה 1",
+                        "teacher": "שגיא גיא",
+                        "room": "308 מע׳ פיסיקה",
+                        "start": "07:45",
+                        "end": "08:25",
                     }
                 ],
+                exams=[],
+                profile_id="ya1",
+                profile_label="Ostrovsky Grade 11-1",
+                profile_mark="XI·1",
+                profile_class_id="61",
+                publish_wake=False,
             )
             html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
-            self.assertIn("ya1-physics-cs10", html)
-            self.assertEqual(data["profiles"][1]["mark"], "XI·1")
-            self.assertEqual(data["profiles"][1]["schedule"][0]["teacher"], "שגיא גיא")
+            self.assertIn("Ostrovsky Grade 11-1", html)
+            self.assertIn("theme-pink", html)
+            self.assertEqual(data["id"], "ya1")
+            self.assertEqual(data["class_id"], "61")
+            self.assertNotIn("wake", data)
+            self.assertFalse((Path(directory) / "wake.json").exists())
 
     def test_wake_data_uses_first_master_lesson_minus_75_minutes(self) -> None:
         wake = build_wake_data(

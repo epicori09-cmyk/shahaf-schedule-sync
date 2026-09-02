@@ -26,6 +26,8 @@ feed is a successful no-op; an unknown non-empty schema is a safe failure.
 
 The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
 
+The separate יא-1 page is [https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/](https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/). Its configured Shahaf source is `https://ostrovsky.shahaf.site/?cls=61&tab=changes`. It is a direct URL with no passcode, profile selector, or Settings screen.
+
 For alarm safety, the workflow sends only structured Master יא-2 schedule facts to
 NVIDIA's OpenAI-compatible NIM endpoint using `openai/gpt-oss-20b` with high
 reasoning effort. NIM never receives the Gist token and
@@ -40,14 +42,14 @@ the safety check can run.
 
 The site has three swipeable views: **Now** shows the current and next lesson, **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps, and **Exams** shows the selected subjects with a calendar alert four days before at 19:00. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
 
-The hidden Settings view also contains the synced profile selector. The Master
-profile is your יא-2 Gist-backed calendar. The additional יא-1 profile is
-generated from the public class timetable using the confirmed track selectors:
-Physics with גיא שגיא in room 308, Computer Science 2, and its Sunday
-alternative-assessment lessons with רועי ויסברט. The public timetable exposes
-parallel groups, so the selector deliberately does not import other Physics,
-Computer Science, Math, or English groups. The selected profile is remembered
-locally on the device; no passcode is stored in this public repository.
+The master page is your יא-2 Gist-backed calendar. The separate יא-1 page is
+generated from the public class timetable using the supplied track selectors:
+accelerated 5-point English, Physics with גיא שגיא, Computer Science with מן
+שמרת, Physical Education with דולב מיכל, alternative Computer Science with
+זכאי יצחק, and Cyber with לופו רועי משה, plus the shared subjects. The public
+timetable exposes parallel groups, so it does not import other Physics,
+Computer Science, Math, or English groups. The יא-1 page does not publish
+`wake.json` and cannot change the יא-2 Gist or wake alarm.
 
 ## Screenshot timetable migration
 

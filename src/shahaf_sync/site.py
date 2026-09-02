@@ -281,9 +281,13 @@ def render_site(
     schedule: list[dict[str, Any]] | None = None,
     exams: list[Exam] | None = None,
     now: datetime | None = None,
-    profiles: list[dict[str, Any]] | None = None,
     alarm_safety: str | None = None,
     alarm_safety_reason: str = "",
+    profile_id: str = "master",
+    profile_label: str = "Master profile — יא-2",
+    profile_mark: str = "XI·2",
+    profile_class_id: str = "11",
+    publish_wake: bool = True,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     schedule_data = schedule or []
@@ -291,10 +295,10 @@ def render_site(
     periods = _period_metadata()
     exams_data = [_exam_to_dict(item) for item in (exams or [])]
     primary_profile = {
-        "id": "master",
-        "label": "Master profile — יא-2",
-        "mark": "XI·2",
-        "class_id": "11",
+        "id": profile_id,
+        "label": profile_label,
+        "mark": profile_mark,
+        "class_id": profile_class_id,
         "schedule": schedule_data,
         "schedule_available": schedule is not None,
         "changes": [_record_to_dict(item) for item in changes],
@@ -307,28 +311,11 @@ def render_site(
         "error": error,
         "generated_at": generated_at,
     }
-    profile_data = [primary_profile]
-    for item in profiles or []:
-        if not isinstance(item, dict) or item.get("id") == "master":
-            continue
-        normalized = dict(item)
-        normalized["changes"] = [
-            _record_to_dict(value) for value in item.get("changes", [])
-        ]
-        normalized["exams"] = [
-            _exam_to_dict(value) for value in item.get("exams", [])
-        ]
-        normalized.setdefault("schedule", [])
-        normalized.setdefault("schedule_available", bool(normalized["schedule"]))
-        normalized.setdefault("exams_available", True)
-        normalized.setdefault("source_url", source_url)
-        normalized.setdefault("source_updated", "")
-        normalized.setdefault("last_successful_sync", "")
-        normalized.setdefault("stale", False)
-        normalized.setdefault("error", "")
-        profile_data.append(normalized)
-
     data = {
+        "id": profile_id,
+        "label": profile_label,
+        "mark": profile_mark,
+        "class_id": profile_class_id,
         "title": title,
         "generated_at": generated_at,
         "source_url": source_url,
@@ -342,23 +329,24 @@ def render_site(
         "periods": periods,
         "exams": exams_data,
         "exams_available": exams is not None,
-        "profiles": profile_data,
     }
-    wake_data = build_wake_data(
-        schedule_data,
-        schedule_available=schedule is not None,
-        stale=stale,
-        now=now,
-        alarm_safety=alarm_safety,
-        alarm_safety_reason=alarm_safety_reason,
-    )
-    data["wake"] = wake_data
+    if publish_wake:
+        wake_data = build_wake_data(
+            schedule_data,
+            schedule_available=schedule is not None,
+            stale=stale,
+            now=now,
+            alarm_safety=alarm_safety,
+            alarm_safety_reason=alarm_safety_reason,
+        )
+        data["wake"] = wake_data
     (output_dir / "data.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    (output_dir / "wake.json").write_text(
-        json.dumps(wake_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    if publish_wake:
+        (output_dir / "wake.json").write_text(
+            json.dumps(wake_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
 
     status = (
         '<div id="sync-status" class="status stale"><span class="status-dot"></span><span>Sync needs attention</span></div>'
@@ -372,22 +360,17 @@ def render_site(
 
     exams_html = '''<section class="exams" id="exams-view" aria-labelledby="exams-title" hidden><div class="section-title"><h2 id="exams-title">Exams</h2><span id="exams-count">0</span></div><div class="exam-list" id="exam-list"></div></section>'''
 
-    settings_html = '''<section id="settings-view" class="settings-view" hidden aria-labelledby="settings-title">
-  <div class="settings-heading"><div><p class="eyebrow">Private on this device</p><h2 id="settings-title">Settings</h2></div><button id="settings-back" class="small-button" type="button">Back to now</button></div>
-  <div class="settings-card"><label class="setting-label" for="profile-select">Active profile</label><select id="profile-select" class="profile-select"></select><p class="setting-help">Your selected profile is remembered on this device. Schedules come from the confirmed Shahaf profile configuration.</p><div id="profile-status" class="setting-status" role="status" aria-live="polite"></div></div>
-  <div class="settings-card settings-facts"><div><span class="fact-label">Connection</span><strong>Offline-ready</strong></div><div><span class="fact-label">Updates</span><strong>Twice each morning</strong></div></div>
-</section>'''
-
     schedule_json = json.dumps(schedule_data, ensure_ascii=False).replace("</", "<\\/")
     periods_json = json.dumps(periods, ensure_ascii=False)
-    profile_json = json.dumps(profile_data, ensure_ascii=False).replace("</", "<\\/")
+    primary_profile_json = json.dumps(primary_profile, ensure_ascii=False).replace("</", "<\\/")
     schedule_available = "true" if schedule is not None else "false"
     sync_display = _pretty_timestamp(last_successful_sync or generated_at)
+    theme_class = "theme-pink" if profile_id == "ya1" else "theme-green"
     html = f'''<!doctype html>
 <html lang="en" dir="ltr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#f4f6f3">
-<meta name="description" content="Your live Ostrovsky Grade 11-2 school schedule">
+<meta name="description" content="{escape(title)}">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -410,28 +393,26 @@ def render_site(
 .section-title{{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}}.section-title h2{{font-size:22px;letter-spacing:-.04em;margin:0}}.section-title>span{{display:grid;place-items:center;min-width:25px;height:25px;padding:0 7px;border-radius:99px;background:#e2e9e6;color:var(--muted);font-size:12px;font-weight:800}}.change-list{{display:grid;gap:8px}}.change-row{{display:grid;grid-template-columns:78px 1fr;gap:13px;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--green);border-radius:14px;padding:13px 14px}}.change-row.cancelled{{border-left-color:var(--red)}}.change-row.added{{border-left-color:var(--blue)}}.change-date strong{{display:block;font-size:14px;letter-spacing:-.03em}}.change-date span{{display:block;color:var(--muted);font-size:11px;margin-top:3px}}.change-body{{min-width:0}}.change-body>div{{display:flex;align-items:center;gap:7px;min-width:0}}.change-label{{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--green)}}.cancelled .change-label{{color:var(--red)}}.added .change-label{{color:var(--blue)}}.change-body h3{{font-size:15px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}}.change-body p{{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:4px 0 0}}.quiet{{border:1px dashed #cfdad6;border-radius:14px;padding:15px;color:var(--muted);font-size:12px}}
 .section-title{{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}}.section-title h2{{font-size:22px;letter-spacing:-.04em;margin:0}}.section-title>span{{display:grid;place-items:center;min-width:25px;height:25px;padding:0 7px;border-radius:99px;background:#e2e9e6;color:var(--muted);font-size:12px;font-weight:800}}.change-list,.exam-list{{display:grid;gap:8px}}.change-row,.exam-row{{display:grid;grid-template-columns:78px 1fr;gap:13px;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--green);border-radius:14px;padding:13px 14px}}.change-row.cancelled{{border-left-color:var(--red)}}.change-row.added{{border-left-color:var(--blue)}}.exam-row{{border-left-color:#d08c3f}}.change-date strong,.exam-date strong{{display:block;font-size:14px;letter-spacing:-.03em}}.change-date span,.exam-date span{{display:block;color:var(--muted);font-size:11px;margin-top:3px}}.change-body,.exam-body{{min-width:0}}.change-body>div{{display:flex;align-items:center;gap:7px;min-width:0}}.change-label{{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--green)}}.cancelled .change-label{{color:var(--red)}}.added .change-label{{color:var(--blue)}}.change-body h3,.exam-body h3{{font-size:15px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}}.change-body p,.exam-body p{{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:4px 0 0}}.quiet{{border:1px dashed #cfdad6;border-radius:14px;padding:15px;color:var(--muted);font-size:12px}}
 .full-schedule{{margin-bottom:25px}}.schedule-heading{{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:16px}}.eyebrow{{margin:0 0 4px;color:var(--green);font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}}.schedule-heading h2{{margin:0;font-size:31px;line-height:1.05;letter-spacing:-.06em}}.small-button{{padding:9px 12px;border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--ink);font-size:12px;font-weight:750;white-space:nowrap}}.day-picker{{display:flex;gap:7px;overflow-x:auto;padding:2px 2px 9px;margin:0 -2px 13px;scrollbar-width:none}}.day-picker::-webkit-scrollbar{{display:none}}.day-chip{{flex:0 0 auto;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--muted);font-size:12px;font-weight:700;white-space:nowrap}}.day-chip.is-selected{{background:var(--ink);border-color:var(--ink);color:#fff}}.selected-day{{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}}.selected-day h3{{margin:0;font-size:21px;letter-spacing:-.04em}}.selected-day p{{margin:3px 0 0;color:var(--muted);font-size:12px}}.period-list{{display:grid;gap:6px}}.period-row{{display:grid;grid-template-columns:1fr 78px;min-height:68px;overflow:hidden;border:1px solid var(--line);border-radius:13px;background:var(--card);box-shadow:0 3px 8px #142b3507}}.period-main{{position:relative;display:flex;flex-direction:column;justify-content:center;min-width:0;padding:11px 14px 11px 18px;border-left:5px solid var(--slot-accent,#cbd6d2)}}.period-row.is-gap .period-main{{border-left-color:#d6dfdc}}.period-main strong{{font-size:16px;line-height:1.12;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.period-main span{{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.gap-label{{font-size:13px!important;font-weight:700;color:#8a979c!important}}.gap-sub{{margin-top:2px}}.period-info{{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;padding:9px 13px 9px 5px;border-left:1px solid var(--line);text-align:right}}.period-info strong{{font-size:24px;line-height:1;font-weight:800;letter-spacing:-.05em}}.period-info span{{margin-top:5px;color:var(--muted);font-size:11px;line-height:1.2;white-space:nowrap}}.empty-day{{border:1px dashed #cfdad6;border-radius:14px;padding:18px;color:var(--muted);font-size:13px}}
-.footer{{display:flex;justify-content:space-between;gap:16px;margin-top:31px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}}.footer a{{color:var(--ink);font-weight:700}}
+ .footer{{display:flex;justify-content:space-between;gap:16px;margin-top:31px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}}.footer a{{color:var(--ink);font-weight:700}}
+.theme-pink{{--paper:#fff8fb;--card:#ffffff;--ink:#382633;--muted:#8d7480;--line:#efdde7;--green:#c14d80;--green-soft:#f9dce8;--red:#bd536f;--red-soft:#fbe6ed;--blue:#aa5b9d;--shadow:0 14px 35px #38263312}}.theme-pink .mark,.theme-pink .lesson-card{{background:#382633}}.theme-pink .lesson-kicker{{color:#f3a7c6}}.theme-pink .view-switch{{background:#f9eaf1}}
 @media (min-width:700px){{.app{{padding-top:48px}}.topbar{{margin-bottom:30px}}.lesson-card{{min-height:220px;padding:28px}}.lesson-card h2{{font-size:38px}}.next-card{{padding:19px 22px}}}}
 @media (max-width:420px){{.app{{width:calc(100% - 24px)}}h1{{font-size:39px;margin-bottom:19px}}.lesson-card{{min-height:173px;padding:19px}}.lesson-card h2{{font-size:27px;margin-top:22px}}.next-card{{padding:15px 16px}}.next-card h3{{font-size:19px;max-width:205px}}.change-row{{grid-template-columns:70px 1fr;padding:12px}}.period-row{{grid-template-columns:1fr 72px}}.period-main{{padding-left:14px}}.period-info{{padding-right:11px}}}}
-.settings-view{{display:grid;gap:10px;margin-bottom:25px}}.settings-heading{{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:5px}}.settings-heading h2{{margin:0;font-size:34px;letter-spacing:-.06em}}.settings-card{{padding:17px;border:1px solid var(--line);border-radius:17px;background:var(--card)}}.setting-label,.fact-label{{display:block;color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}}.profile-select,.profile-form input{{width:100%;margin-top:8px;min-height:43px;border:1px solid var(--line);border-radius:11px;background:#f8faf8;color:var(--ink);font:inherit;padding:0 12px}}.setting-help{{margin:9px 0 0;color:var(--muted);font-size:12px}}.setting-status{{min-height:17px;margin-top:8px;color:var(--green);font-size:12px;font-weight:700}}.profile-form-row{{display:grid;grid-template-columns:1fr auto;gap:8px}}.profile-form input{{margin-top:8px}}.primary-button{{background:var(--ink);border-color:var(--ink);color:#fff;margin-top:8px}}.settings-facts{{display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--green-soft)}}.settings-facts strong{{display:block;margin-top:5px;font-size:14px}}
 @media (prefers-reduced-motion:reduce){{*{{transition:none!important}}}}
-</style></head><body><main class="app">
-<header class="topbar"><a class="identity" href="."><span class="mark" id="profile-mark">XI·2</span><span><strong>My schedule</strong><small id="profile-label">Master profile — יא-2</small></span></a><a class="source" id="source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer" aria-label="Open Shahaf">↗</a></header>
+</style></head><body class="{theme_class}"><main class="app">
+<header class="topbar"><a class="identity" href="."><span class="mark">{escape(profile_mark)}</span><span><strong>My schedule</strong><small>{escape(profile_label)}</small></span></a><a class="source" id="source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer" aria-label="Open Shahaf">↗</a></header>
 <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Full schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
 <section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p></section>
 <section id="full-view" class="full-schedule" hidden aria-labelledby="full-title"><div class="schedule-heading"><div><p class="eyebrow">Every period</p><h2 id="full-title">Full schedule</h2></div><button id="back-to-now" class="small-button" type="button">Back to now</button></div><div id="day-picker" class="day-picker" role="listbox" aria-label="Choose a school day"></div><div class="selected-day"><div><h3 id="selected-day-title">Loading…</h3><p id="selected-day-summary"></p></div><button id="jump-today" class="small-button" type="button">Today</button></div><div id="schedule-periods" class="period-list"></div></section>
 {exams_html}
-{settings_html}
 {changes_html}
 <footer class="footer"><span>Last successful sync: <span id="last-sync">{escape(sync_display)}</span></span><a id="footer-source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer">Open Shahaf ↗</a></footer>
 </main><script>
-const profileData = {profile_json};
+const activeProfile = {primary_profile_json};
 const periods = {periods_json};
 const scheduleZone = "Asia/Jerusalem";
 const dateFormatter = new Intl.DateTimeFormat("en-US", {{ weekday: "long", month: "long", day: "numeric", timeZone: scheduleZone }});
 const shortDateFormatter = new Intl.DateTimeFormat("en-US", {{ weekday: "short", month: "short", day: "numeric", timeZone: scheduleZone }});
 const palette = ["#d16d8e", "#78c8cb", "#f0bd47", "#76c983", "#8796df", "#d88a54"];
-let activeProfile = profileData[0] || {{ schedule: [], changes: [], exams: [], schedule_available: false, exams_available: false }};
 let schedule = activeProfile.schedule || [];
 let scheduleAvailable = Boolean(activeProfile.schedule_available);
 let changes = activeProfile.changes || [];
@@ -452,14 +433,6 @@ function renderChanges() {{ const list = document.getElementById("change-list");
 function renderExams() {{ const list = document.getElementById("exam-list"); const count = document.getElementById("exams-count"); count.textContent = String(exams.length); if (!exams.length) {{ list.innerHTML = `<div class="quiet">No upcoming exams found for this profile.</div>`; return; }} list.innerHTML = exams.map((item) => {{ let periodText = String(item.start_period); if (item.end_period !== item.start_period) periodText += `–${{item.end_period}}`; return `<article class="exam-row"><div class="exam-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Periods ${{escapeHtml(periodText)}}</span></div><div class="exam-body"><h3>${{escapeHtml(item.subject)}}</h3><p>Reminder: 4 days before · 7:00 PM</p></div></article>`; }}).join(""); }}
 function setView(view) {{ const full = view === "full"; const examsView = view === "exams"; document.getElementById("now-view").hidden = full || examsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("changes-view").hidden = full || examsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} window.scrollTo({{top: 0, behavior: "smooth"}}); }}
 document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => renderFullDay(nowInSchoolZone().date));
-const PROFILE_STORAGE_KEY = "shahaf.profile.v1";
-let activeProfileId = (() => {{ try {{ return localStorage.getItem(PROFILE_STORAGE_KEY + ".active") || "master"; }} catch (_) {{ return "master"; }} }})();
-function saveProfiles() {{ try {{ localStorage.setItem(PROFILE_STORAGE_KEY + ".active", activeProfileId); }} catch (_) {{}} }}
-function renderProfiles() {{ const select = document.getElementById("profile-select"); select.innerHTML = profileData.map((profile) => `<option value="${{escapeHtml(profile.id)}}">${{escapeHtml(profile.label || profile.id)}}</option>`).join(""); if (!profileData.some((profile) => profile.id === activeProfileId)) activeProfileId = profileData[0]?.id || "master"; select.value = activeProfileId; document.getElementById("profile-status").textContent = `Using ${{activeProfile.label || activeProfile.id}}`; }}
-function renderProfileStatus() {{ const status = document.getElementById("sync-status"); if (status) {{ status.classList.toggle("stale", Boolean(activeProfile.stale)); status.querySelector("span:last-child").textContent = activeProfile.stale ? "Sync needs attention" : "Synced"; }} document.getElementById("profile-mark").textContent = activeProfile.mark || "XI"; document.getElementById("profile-label").textContent = activeProfile.label || "School schedule"; document.getElementById("last-sync").textContent = activeProfile.last_successful_sync || "Unknown"; [document.getElementById("source-link"), document.getElementById("footer-source-link")].forEach((link) => {{ if (link && activeProfile.source_url) link.href = activeProfile.source_url; }}); }}
-function applyProfile(profileId) {{ const next = profileData.find((profile) => profile.id === profileId) || profileData[0]; if (!next) return; activeProfile = next; activeProfileId = next.id; schedule = next.schedule || []; scheduleAvailable = Boolean(next.schedule_available); changes = next.changes || []; exams = next.exams || []; saveProfiles(); renderProfileStatus(); renderProfiles(); renderChanges(); renderExams(); refreshLiveLessons(); if (!document.getElementById("full-view").hidden) renderFullDay(scheduleDates().includes(nowInSchoolZone().date) ? nowInSchoolZone().date : scheduleDates()[0]); }}
-setView = function(view) {{ const full = view === "full"; const examsView = view === "exams"; const settingsView = view === "settings"; document.getElementById("now-view").hidden = full || examsView || settingsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("settings-view").hidden = !settingsView; document.getElementById("changes-view").hidden = full || examsView || settingsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} if (settingsView) renderProfiles(); window.scrollTo({{top: 0, behavior: "smooth"}}); }};
-document.getElementById("settings-back").addEventListener("click", () => setView("now")); document.getElementById("profile-select").addEventListener("change", (event) => applyProfile(event.target.value));
 let swipeStart = null;
 const swipeSurface = document.querySelector(".app");
 swipeSurface.addEventListener("touchstart", (event) => {{
@@ -474,12 +447,12 @@ swipeSurface.addEventListener("touchend", (event) => {{
   const dy = touch.clientY - swipeStart.y;
   swipeStart = null;
   if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
-  const views = ["now", "full", "exams", "settings"];
-  const currentView = !document.getElementById("settings-view").hidden ? "settings" : (document.getElementById("exams-view").hidden ? (document.getElementById("full-view").hidden ? "now" : "full") : "exams");
+  const views = ["now", "full", "exams"];
+  const currentView = document.getElementById("exams-view").hidden ? (document.getElementById("full-view").hidden ? "now" : "full") : "exams";
   const nextIndex = views.indexOf(currentView) + (dx < 0 ? 1 : -1);
   if (nextIndex >= 0 && nextIndex < views.length) setView(views[nextIndex]);
 }}, {{ passive: true }});
-applyProfile(activeProfileId); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+renderChanges(); renderExams(); refreshLiveLessons(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 </script></body></html>
 '''
     (output_dir / "index.html").write_text(html, encoding="utf-8")

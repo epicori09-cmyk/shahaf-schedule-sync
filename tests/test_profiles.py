@@ -5,6 +5,7 @@ import unittest
 
 from shahaf_sync.model import Lesson, PublishedChange, Exam
 from shahaf_sync.profiles import apply_changes, select_exams, select_lessons
+from shahaf_sync.ya1_schedule import build_ya1_schedule
 
 
 SPEC = {
@@ -56,6 +57,16 @@ class ProfileTests(unittest.TestCase):
         ]
         selected = select_exams(exams, SPEC)
         self.assertEqual([item.subject for item in selected], ["מדעי המחשב 2"])
+
+    def test_ya1_transcribed_baseline_keeps_the_supplied_periods_and_gaps(self) -> None:
+        lessons = build_ya1_schedule(date(2026, 9, 6), date(2026, 9, 10))
+        sunday = {(item.period, item.subject) for item in lessons if item.date == date(2026, 9, 6)}
+        tuesday = {(item.period, item.subject) for item in lessons if item.date == date(2026, 9, 8)}
+        self.assertIn((9, "אנגלית 5 יח״ל מואץ"), sunday)
+        self.assertIn((10, "הערכה חלופית – מדעי המחשב"), sunday)
+        self.assertIn((1, "מדעי המחשב"), tuesday)
+        self.assertIn((6, "פיסיקה"), tuesday)
+        self.assertNotIn((0, "פיסיקה"), tuesday)
 
 
 if __name__ == "__main__":

@@ -10,14 +10,14 @@
   "site_dir": "site",
   "additional_profiles": [
     {
-      "id": "ya1-physics-cs10",
-      "label": "יא-1 · Physics + Computer Science 10-point",
+      "id": "ya1",
+      "label": "Ostrovsky Grade 11-1",
       "mark": "XI·1",
       "class_id": "61",
       "class_number": 1,
+      "baseline": "transcribed",
       "shared_subjects": [
         "חינוך",
-        "חינוך גופני",
         "היסטוריה",
         "ספרות",
         "עברית",
@@ -25,20 +25,43 @@
       ],
       "selectors": [
         {
-          "subject": "פיסיקה 1",
+          "subject": "אנגלית מואץ 5 יח״ל",
+          "teacher": "שפינל איירין"
+        },
+        {
           "teacher": "שגיא גיא",
-          "room": "308 מע׳ פיסיקה"
+          "weekdays": [1],
+          "periods": [4, 5, 6]
         },
         {
-          "subject": "מדעי המחשב 2"
+          "teacher": "שגיא גיא",
+          "weekdays": [3],
+          "periods": [0, 1, 2, 3]
         },
         {
-          "subject": "הערכה חלופית - מדעי המחשב2",
-          "teacher": "ויסברט רועי",
-          "room": "152 מעבדת מחשבים"
+          "teacher": "מן שמרת",
+          "weekdays": [1],
+          "periods": [1, 2, 3]
+        },
+        {
+          "teacher": "מן שמרת",
+          "weekdays": [3],
+          "periods": [4, 5, 6]
+        },
+        {
+          "teacher": "דולב מיכל",
+          "weekdays": [2, 6],
+          "periods": [7]
+        },
+        {
+          "teacher": "זכאי יצחק"
+        },
+        {
+          "subject": "סייבר",
+          "room": "153 מעבדת מחשבים"
         }
       ],
-      "exam_terms": ["פיסיקה", "מדעי המחשב 2"]
+      "exam_terms": ["אנגלית", "פיסיקה", "מדעי המחשב", "סייבר", "הערכה חלופית", "ספרות", "תנ״ך", "היסטוריה", "עברית", "חינוך"]
     }
   ]
 }
