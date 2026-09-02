@@ -61,9 +61,19 @@ class ProfileTests(unittest.TestCase):
     def test_ya1_transcribed_baseline_keeps_the_supplied_periods_and_gaps(self) -> None:
         lessons = build_ya1_schedule(date(2026, 9, 6), date(2026, 9, 10))
         sunday = {(item.period, item.subject) for item in lessons if item.date == date(2026, 9, 6)}
+        monday = {(item.period, item.subject, item.teacher) for item in lessons if item.date == date(2026, 9, 7)}
         tuesday = {(item.period, item.subject) for item in lessons if item.date == date(2026, 9, 8)}
-        self.assertIn((9, "אנגלית 5 יח״ל מואץ"), sunday)
-        self.assertIn((10, "הערכה חלופית – מדעי המחשב"), sunday)
+        self.assertNotIn((4, "היסטוריה"), sunday)
+        for period in (9, 10, 11, 12):
+            self.assertFalse(any(item_period == period for item_period, _subject in sunday))
+        self.assertEqual(
+            sorted(item for item in monday if item[0] in (10, 11, 12)),
+            [
+                (10, "הערכה חלופית", "צחי"),
+                (11, "הערכה חלופית", "צחי"),
+                (12, "הערכה חלופית", "צחי"),
+            ],
+        )
         self.assertIn((1, "מדעי המחשב"), tuesday)
         self.assertIn((6, "פיסיקה"), tuesday)
         self.assertNotIn((0, "פיסיקה"), tuesday)
