@@ -414,7 +414,7 @@ def render_site(
 @media (max-width:420px){{.app{{width:calc(100% - 24px)}}h1{{font-size:39px;margin-bottom:19px}}.lesson-card{{min-height:173px;padding:19px}}.lesson-card h2{{font-size:27px;margin-top:22px}}.next-card{{padding:15px 16px}}.next-card h3{{font-size:19px;max-width:205px}}.change-row{{grid-template-columns:70px 1fr;padding:12px}}.period-row{{grid-template-columns:1fr 72px}}.period-main{{padding-left:14px}}.period-info{{padding-right:11px}}}}
 @media (prefers-reduced-motion:reduce){{*{{transition:none!important}}}}
 {gate_css}
-</style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}<main class="app">
+</style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}{gate_script}<main class="app">
 <header class="topbar"><a class="identity" href="."><span class="mark">{escape(profile_mark)}</span><span><strong>My schedule</strong><small>{escape(profile_label)}</small></span></a><a class="source" id="source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer" aria-label="Open Shahaf">↗</a></header>
 <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Full schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
 <section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p>{transit_html}</section>
@@ -423,7 +423,6 @@ def render_site(
 {changes_html}
 <footer class="footer"><span>Last successful sync: <span id="last-sync">{escape(sync_display)}</span></span><a id="footer-source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer">Open Shahaf ↗</a></footer>
 </main><script>
-{gate_script}
 const activeProfile = {primary_profile_json};
 const periods = {periods_json};
 const scheduleZone = "Asia/Jerusalem";

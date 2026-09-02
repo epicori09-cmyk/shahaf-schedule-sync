@@ -227,6 +227,7 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("site-access-gate", ya1_html)
             self.assertIn("אורי המלך", ya1_html)
             self.assertNotIn("localStorage", ya1_html)
+            self.assertNotIn("<script>\n<script>", ya1_html)
 
             render_site(
                 Path(directory) / "master",
