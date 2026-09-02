@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
-from shahaf_sync.cli import Config, _now, load_config
+from shahaf_sync.cli import Config, _now, _stale_transit_payload, load_config
 
 
 class CliTests(unittest.TestCase):
@@ -20,6 +20,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual(config.gist_filename, "school.ics")
         self.assertEqual(len(config.additional_profiles), 1)
         self.assertEqual(config.additional_profiles[0]["class_id"], "61")
+        self.assertEqual(config.transit["origin_address"], "מרדכי זעירא 5, רעננה")
+        self.assertEqual(config.transit["destination_address"], "אוסטרובסקי 26, רעננה")
+
+    def test_main_failure_payload_cannot_touch_the_master_alarm(self) -> None:
+        config = load_config(Path("config.json"))
+        payload = _stale_transit_payload(config, _now(config), "main source unavailable")
+        self.assertEqual(payload["profile"], "ya1")
+        self.assertEqual(payload["alarm_label"], "Shahaf Ya1 Wake")
+        self.assertEqual(payload["shortcut_action"], "leave")
+        self.assertTrue(payload["stale"])
 
 
 if __name__ == "__main__":

@@ -288,6 +288,7 @@ def render_site(
     profile_mark: str = "XI·2",
     profile_class_id: str = "11",
     publish_wake: bool = True,
+    transit_wake: dict[str, Any] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     schedule_data = schedule or []
@@ -340,12 +341,18 @@ def render_site(
             alarm_safety_reason=alarm_safety_reason,
         )
         data["wake"] = wake_data
+    if transit_wake is not None:
+        data["transit_wake"] = transit_wake
     (output_dir / "data.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     if publish_wake:
         (output_dir / "wake.json").write_text(
             json.dumps(wake_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    elif transit_wake is not None:
+        (output_dir / "wake.json").write_text(
+            json.dumps(transit_wake, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
     status = (

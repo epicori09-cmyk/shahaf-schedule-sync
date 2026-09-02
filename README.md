@@ -48,8 +48,16 @@ accelerated 5-point English, Physics with גיא שגיא, Computer Science with
 שמרת, Physical Education with דולב מיכל, alternative Computer Science with
 זכאי יצחק, and Cyber with לופו רועי משה, plus the shared subjects. The public
 timetable exposes parallel groups, so it does not import other Physics,
-Computer Science, Math, or English groups. The יא-1 page does not publish
-`wake.json` and cannot change the יא-2 Gist or wake alarm.
+Computer Science, Math, or English groups. The יא-1 page publishes only its
+own scheduled-transit payload at
+`https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/wake.json`. It uses
+the free Israeli Ministry of Transport GTFS feed, selects the latest route
+that reaches Ostrovsky at least five minutes before the first confirmed יא-1
+lesson, and calculates wake-up 75 minutes before leaving home. Its Shortcut
+uses the separate `Shahaf Ya1 Wake` label. Scheduled transit data does not
+predict live delays; the endpoint returns `leave` when route data is stale,
+malformed, or no safe route is available. It cannot change the יא-2 Gist or
+wake alarm.
 
 ## Screenshot timetable migration
 

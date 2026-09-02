@@ -6,3 +6,7 @@ htmlcov/
 coverage.xml
 site/data.json
 site/wake.json
+site/ya1/data.json
+site/ya1/wake.json
+site/ya1/index.html
+.cache/

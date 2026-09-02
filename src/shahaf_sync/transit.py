@@ -14,8 +14,10 @@ import io
 import math
 from pathlib import Path
 import tempfile
+from collections.abc import Callable, Mapping
 from typing import Iterable
 from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zipfile import BadZipFile, ZipFile
 from zoneinfo import ZoneInfo
@@ -150,116 +152,117 @@ def plan_route(
     deadline = _gtfs_datetime(target_date, arrival_deadline)
     earliest = _aware(not_before) if not_before else _gtfs_datetime(target_date, time(0, 0))
     departures = _trip_index(schedule)
-    candidates: list[TransitRoute] = []
-    max_states = 12_000
-    states = 0
-
-    def finish(
-        stop_id: str,
-        arrival: datetime,
-        first_bus: datetime,
-        transfers: int,
-        legs: tuple[dict[str, object], ...],
-    ) -> None:
-        walk = destination_stops.get(stop_id)
-        if walk is None:
-            return
-        final_arrival = arrival + timedelta(minutes=walk)
-        if final_arrival > deadline:
-            return
-        candidates.append(
-            TransitRoute(
-                departure=first_bus - timedelta(minutes=next_walk),
-                first_bus_departure=first_bus,
-                arrival=final_arrival,
-                transfers=transfers,
-                legs=legs
-                + ((
-                    {
-                        "type": "walk",
-                        "from": "final stop",
-                        "to": DESTINATION_ADDRESS,
-                        "minutes": walk,
-                    },
-                ) if walk else ()),
-            )
-        )
-
-    def ride(
-        trip: TransitTrip,
-        position: int,
-        arrival: datetime,
-        first_bus: datetime,
-        transfers: int,
-        legs: tuple[dict[str, object], ...],
-        used_routes: frozenset[str],
-    ) -> None:
-        nonlocal states
-        states += 1
-        if states > max_states:
-            return
-        board = trip.stop_times[position]
-        for end_position in range(position + 1, len(trip.stop_times)):
-            end_stop_time = trip.stop_times[end_position]
-            end_arrival = _gtfs_datetime(target_date, end_stop_time.arrival)
-            if end_arrival < arrival:
-                continue
-            transit_leg = {
-                "type": "transit",
-                "route": trip.route_name,
-                "route_id": trip.route_id,
-                "trip_id": trip.trip_id,
-                "from_stop": schedule.stops.get(board.stop_id, TransitStop(board.stop_id, board.stop_id, 0, 0)).name,
-                "to_stop": schedule.stops.get(end_stop_time.stop_id, TransitStop(end_stop_time.stop_id, end_stop_time.stop_id, 0, 0)).name,
-                "departure": _gtfs_datetime(target_date, board.departure).strftime("%H:%M"),
-                "arrival": end_arrival.strftime("%H:%M"),
-            }
-            next_legs = legs + (transit_leg,)
-            finish(end_stop_time.stop_id, end_arrival, first_bus, transfers, next_legs)
-            if transfers >= max_transfers:
-                continue
-            transfer_ready = end_arrival + timedelta(minutes=2)
-            for next_trip, next_position in departures.get(end_stop_time.stop_id, ()):
-                if next_trip.route_id in used_routes:
-                    continue
-                next_departure = _gtfs_datetime(target_date, next_trip.stop_times[next_position].departure)
-                if next_departure < transfer_ready:
-                    continue
-                ride(
-                    next_trip,
-                    next_position,
-                    next_departure,
-                    first_bus,
-                    transfers + 1,
-                    next_legs,
-                    used_routes | {next_trip.route_id},
-                )
-
+    # Search initial boardings in descending home-departure order.  The first
+    # start that produces a safe route is therefore the latest possible start;
+    # this avoids a global state cap biasing the answer toward early buses.
+    starts: list[tuple[datetime, datetime, str, int, int, TransitTrip]] = []
     for origin_stop_id, walk_to_origin in origin_stops:
-        next_walk = walk_to_origin
         for trip, position in departures.get(origin_stop_id, ()):
             first_bus = _gtfs_datetime(target_date, trip.stop_times[position].departure)
             home_departure = first_bus - timedelta(minutes=walk_to_origin)
-            if home_departure < earliest:
-                continue
-            if first_bus > deadline:
-                continue
-            start_leg: tuple[dict[str, object], ...] = (
-                {
-                    "type": "walk",
-                    "from": ORIGIN_ADDRESS,
-                    "to": schedule.stops[origin_stop_id].name,
-                    "minutes": walk_to_origin,
-                },
-            ) if walk_to_origin else ()
-            ride(trip, position, first_bus, first_bus, 0, start_leg, frozenset({trip.route_id}))
+            if earliest <= home_departure and first_bus <= deadline:
+                starts.append((home_departure, first_bus, origin_stop_id, walk_to_origin, position, trip))
+    starts.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
 
-    if not candidates:
-        return None
-    return max(
-        candidates,
-        key=lambda item: (item.departure, -item.transfers, -int((item.arrival - item.departure).total_seconds())),
-    )
+    for home_departure, first_bus, origin_stop_id, walk_to_origin, position, initial_trip in starts:
+        candidates: list[TransitRoute] = []
+        states = 0
+
+        def finish(
+            stop_id: str,
+            arrival: datetime,
+            transfers: int,
+            legs: tuple[dict[str, object], ...],
+        ) -> None:
+            walk = destination_stops.get(stop_id)
+            if walk is None:
+                return
+            final_arrival = arrival + timedelta(minutes=walk)
+            if final_arrival > deadline:
+                return
+            candidates.append(
+                TransitRoute(
+                    departure=home_departure,
+                    first_bus_departure=first_bus,
+                    arrival=final_arrival,
+                    transfers=transfers,
+                    legs=legs
+                    + ((
+                        {
+                            "type": "walk",
+                            "from": "final stop",
+                            "to": DESTINATION_ADDRESS,
+                            "minutes": walk,
+                        },
+                    ) if walk else ()),
+                )
+            )
+
+        def ride(
+            trip: TransitTrip,
+            position: int,
+            arrival: datetime,
+            transfers: int,
+            legs: tuple[dict[str, object], ...],
+            used_routes: frozenset[str],
+        ) -> None:
+            nonlocal states
+            states += 1
+            if states > 2_000:
+                return
+            board = trip.stop_times[position]
+            for end_position in range(position + 1, len(trip.stop_times)):
+                end_stop_time = trip.stop_times[end_position]
+                end_arrival = _gtfs_datetime(target_date, end_stop_time.arrival)
+                if end_arrival < arrival:
+                    continue
+                transit_leg = {
+                    "type": "transit",
+                    "route": trip.route_name,
+                    "route_id": trip.route_id,
+                    "trip_id": trip.trip_id,
+                    "from_stop": schedule.stops.get(board.stop_id, TransitStop(board.stop_id, board.stop_id, 0, 0)).name,
+                    "to_stop": schedule.stops.get(end_stop_time.stop_id, TransitStop(end_stop_time.stop_id, end_stop_time.stop_id, 0, 0)).name,
+                    "departure": _gtfs_datetime(target_date, board.departure).strftime("%H:%M"),
+                    "arrival": end_arrival.strftime("%H:%M"),
+                }
+                next_legs = legs + (transit_leg,)
+                finish(end_stop_time.stop_id, end_arrival, transfers, next_legs)
+                if transfers >= max_transfers or end_arrival >= deadline:
+                    continue
+                transfer_ready = end_arrival + timedelta(minutes=2)
+                for next_trip, next_position in departures.get(end_stop_time.stop_id, ()):
+                    if next_trip.route_id in used_routes:
+                        continue
+                    next_departure = _gtfs_datetime(target_date, next_trip.stop_times[next_position].departure)
+                    if next_departure < transfer_ready:
+                        continue
+                    if next_departure > deadline:
+                        break
+                    ride(
+                        next_trip,
+                        next_position,
+                        next_departure,
+                        transfers + 1,
+                        next_legs,
+                        used_routes | {next_trip.route_id},
+                    )
+
+        start_leg: tuple[dict[str, object], ...] = (
+            {
+                "type": "walk",
+                "from": ORIGIN_ADDRESS,
+                "to": schedule.stops[origin_stop_id].name,
+                "minutes": walk_to_origin,
+            },
+        ) if walk_to_origin else ()
+        ride(initial_trip, position, first_bus, 0, start_leg, frozenset({initial_trip.route_id}))
+        if candidates:
+            return max(
+                candidates,
+                key=lambda item: (-item.transfers, -int((item.arrival - item.departure).total_seconds())),
+            )
+    return None
 
 
 def google_maps_url(origin_address: str = ORIGIN_ADDRESS, destination_address: str = DESTINATION_ADDRESS) -> str:
@@ -275,7 +278,7 @@ def google_maps_url(origin_address: str = ORIGIN_ADDRESS, destination_address: s
 
 
 def build_ya1_transit_wake(
-    schedule: TransitSchedule | None,
+    schedule: TransitSchedule | Mapping[date, TransitSchedule] | Callable[[date], TransitSchedule | None] | None,
     lessons: list[dict[str, object]],
     *,
     now: datetime,
@@ -283,6 +286,9 @@ def build_ya1_transit_wake(
     destination: tuple[float, float],
     stale: bool = False,
     max_walk_m: int = 1800,
+    source_timestamp: str = "",
+    origin_address: str = ORIGIN_ADDRESS,
+    destination_address: str = DESTINATION_ADDRESS,
 ) -> dict[str, object]:
     base: dict[str, object] = {
         "profile": "ya1",
@@ -294,7 +300,7 @@ def build_ya1_transit_wake(
         "first_bus_departure": None,
         "route_arrival": None,
         "route": [],
-        "google_maps_url": google_maps_url(),
+        "google_maps_url": google_maps_url(origin_address, destination_address),
         "wake_time": None,
         "wake_at": None,
         "subject": None,
@@ -302,8 +308,9 @@ def build_ya1_transit_wake(
         "stale": stale,
         "fallback_status": "stale" if stale else "none",
         "shortcut_action": "leave" if stale else "clear",
-        "source_timestamp": schedule.source_timestamp if schedule else "",
+        "source_timestamp": source_timestamp or (schedule.source_timestamp if isinstance(schedule, TransitSchedule) else ""),
         "timezone": "Asia/Jerusalem",
+        "error": "",
     }
     if stale or schedule is None:
         return base
@@ -322,10 +329,30 @@ def build_ya1_transit_wake(
     for school_day in sorted(by_date):
         first = min(by_date[school_day], key=lambda item: (str(item["start"]), int(item.get("period", 0))))
         first_start = time.fromisoformat(str(first["start"]))
+        if school_day == current.date() and datetime.combine(school_day, first_start).replace(tzinfo=ZONE) <= current:
+            continue
         deadline = (datetime.combine(school_day, first_start) - timedelta(minutes=5)).time()
         not_before = current if school_day == current.date() else _gtfs_datetime(school_day, time(0, 0))
+        if isinstance(schedule, TransitSchedule):
+            day_schedule = schedule
+        elif isinstance(schedule, Mapping):
+            day_schedule = schedule.get(school_day)
+        else:
+            day_schedule = schedule(school_day) if schedule else None
+        if day_schedule is None:
+            base.update(
+                {
+                    "next_school_day": school_day.isoformat(),
+                    "first_lesson_start": first_start.strftime("%H:%M"),
+                    "arrival_deadline": deadline.strftime("%H:%M"),
+                    "subject": str(first.get("subject", "")),
+                    "fallback_status": "no-safe-route",
+                    "shortcut_action": "leave",
+                }
+            )
+            return base
         route = plan_route(
-            schedule,
+            day_schedule,
             school_day,
             deadline,
             origin,
@@ -345,7 +372,10 @@ def build_ya1_transit_wake(
                 }
             )
             return base
-        wake_at = route.departure - timedelta(minutes=75)
+        # iPhone Clock alarms have minute precision. Round down before
+        # subtracting the 75-minute buffer so the alarm is never later than
+        # the calculated safe wake time.
+        wake_at = route.departure.replace(second=0, microsecond=0) - timedelta(minutes=75)
         if school_day == current.date() and wake_at <= current:
             continue
         base.update(
@@ -379,6 +409,18 @@ def _read_csv(zf: ZipFile, name: str) -> list[dict[str, str]]:
         raise TransitSourceError(f"GTFS is missing {name}") from exc
     try:
         return list(csv.DictReader(io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8-sig", newline="")))
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise TransitSourceError(f"GTFS file {name} is malformed") from exc
+
+
+def _iter_csv(zf: ZipFile, name: str):
+    try:
+        raw = zf.open(name, "r")
+    except KeyError as exc:
+        raise TransitSourceError(f"GTFS is missing {name}") from exc
+    try:
+        with raw, io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+            yield from csv.DictReader(text)
     except (UnicodeDecodeError, csv.Error) as exc:
         raise TransitSourceError(f"GTFS file {name} is malformed") from exc
 
@@ -435,7 +477,10 @@ def load_gtfs(path: Path, target_date: date, *, source_timestamp: str = "") -> T
             if row.get("stop_id") and row.get("stop_lat") and row.get("stop_lon")
         }
         grouped: dict[str, list[StopTime]] = {}
-        for row in _read_csv(zf, "stop_times.txt"):
+        # stop_times.txt is hundreds of megabytes uncompressed in the
+        # Ministry archive. Stream it instead of materializing the entire
+        # table, while still filtering to the active service trips.
+        for row in _iter_csv(zf, "stop_times.txt"):
             trip_id = row.get("trip_id", "")
             if trip_id not in active_trips:
                 continue
@@ -474,9 +519,10 @@ def download_gtfs(url: str = DEFAULT_GTFS_URL, *, directory: Path | None = None)
     target_dir = directory or Path(tempfile.gettempdir()) / "shahaf-schedule-sync"
     target_dir.mkdir(parents=True, exist_ok=True)
     archive = target_dir / "israel-public-transportation.zip"
+    partial = archive.with_suffix(".zip.part")
     request = Request(url, headers={"User-Agent": "shahaf-schedule-sync/1.0"})
     try:
-        with urlopen(request, timeout=180) as response, archive.open("wb") as output:
+        with urlopen(request, timeout=180) as response, partial.open("wb") as output:
             total = 0
             while chunk := response.read(1024 * 1024):
                 total += len(chunk)
@@ -484,8 +530,9 @@ def download_gtfs(url: str = DEFAULT_GTFS_URL, *, directory: Path | None = None)
             if total < 1_000_000:
                 raise TransitSourceError("GTFS download is unexpectedly small")
             timestamp = response.headers.get("Last-Modified") or datetime.now(ZONE).isoformat()
+        partial.replace(archive)
     except TransitSourceError:
         raise
-    except (OSError, ValueError) as exc:
+    except (HTTPError, URLError, OSError, ValueError) as exc:
         raise TransitSourceError(f"Could not download GTFS: {exc}") from exc
     return archive, timestamp

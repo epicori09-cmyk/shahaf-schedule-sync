@@ -19,6 +19,12 @@ from .profiles import apply_changes, lesson_to_dict, select_changes, select_exam
 from .reconcile import ChangeRecord, reconcile_calendar
 from .shahaf import ShahafSourceError, parse_changes_html, parse_exams_html, parse_timetable_html
 from .site import build_schedule, build_wake_data, render_site
+from .transit import (
+    TransitSourceError,
+    build_ya1_transit_wake,
+    download_gtfs,
+    load_gtfs,
+)
 from .ya1_schedule import build_ya1_schedule
 
 
@@ -38,6 +44,7 @@ class Config:
     site_dir: str
     class_number: int = 2
     additional_profiles: tuple[dict[str, object], ...] = ()
+    transit: dict[str, object] | None = None
 
 
 def load_config(path: Path) -> Config:
@@ -53,6 +60,7 @@ def load_config(path: Path) -> Config:
         *(data[key] for key in required),
         int(data.get("class_number", 2)),
         tuple(profiles),
+        data.get("transit") if isinstance(data.get("transit"), dict) else None,
     )
 
 
@@ -149,6 +157,22 @@ def _profile_failure(
         "error": error,
         "generated_at": current.isoformat(),
     }
+
+
+def _stale_transit_payload(config: Config, current: datetime, error: str) -> dict[str, object]:
+    transit_spec = config.transit or {}
+    payload = build_ya1_transit_wake(
+        None,
+        [],
+        now=current,
+        origin=(0.0, 0.0),
+        destination=(0.0, 0.0),
+        stale=True,
+        origin_address=str(transit_spec.get("origin_address", "מרדכי זעירא 5, רעננה")),
+        destination_address=str(transit_spec.get("destination_address", "אוסטרובסקי 26, רעננה")),
+    )
+    payload["error"] = error
+    return payload
 
 
 def _dict_change(change: ChangeRecord) -> dict[str, object]:
@@ -365,6 +389,56 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
                 profile_views.append(
                     _profile_failure(spec, previous_ya1, current, str(profile_exc))
                 )
+
+        transit_spec = config.transit or {}
+        transit_archive: Path | None = None
+        transit_timestamp = ""
+        transit_download_error: str | None = None
+        transit_cache: dict[date, object] = {}
+        for profile in profile_views:
+            if str(profile.get("id")) != "ya1":
+                continue
+            origin_address = str(transit_spec.get("origin_address", "מרדכי זעירא 5, רעננה"))
+            destination_address = str(transit_spec.get("destination_address", "אוסטרובסקי 26, רעננה"))
+            try:
+                origin_raw = transit_spec["origin_coordinates"]
+                destination_raw = transit_spec["destination_coordinates"]
+                origin = (float(origin_raw["lat"]), float(origin_raw["lon"]))
+                destination = (float(destination_raw["lat"]), float(destination_raw["lon"]))
+                if not bool(transit_spec.get("enabled", False)):
+                    raise TransitSourceError("Ya1 transit wake is disabled in config")
+                if transit_archive is None and transit_download_error is None:
+                    transit_archive, transit_timestamp = download_gtfs(
+                        str(transit_spec.get("gtfs_url", ""))
+                    )
+
+                def schedule_for(day: date):
+                    if day not in transit_cache:
+                        transit_cache[day] = load_gtfs(
+                            transit_archive,
+                            day,
+                            source_timestamp=transit_timestamp,
+                        )
+                    return transit_cache[day]
+
+                profile_schedule = profile.get("schedule")
+                if not isinstance(profile_schedule, list) or bool(profile.get("stale")):
+                    raise TransitSourceError(str(profile.get("error") or "Ya1 Shahaf schedule is stale"))
+                profile["transit_wake"] = build_ya1_transit_wake(
+                    schedule_for,
+                    profile_schedule,
+                    now=current,
+                    origin=origin,
+                    destination=destination,
+                    max_walk_m=int(transit_spec.get("max_walk_m", 1800)),
+                    source_timestamp=transit_timestamp,
+                    origin_address=origin_address,
+                    destination_address=destination_address,
+                )
+            except (KeyError, TypeError, ValueError, TransitSourceError, OSError) as transit_exc:
+                transit_download_error = str(transit_exc) if transit_archive is None else transit_download_error
+                profile["transit_wake"] = _stale_transit_payload(config, current, str(transit_exc))
+                profile["transit_wake"]["source_timestamp"] = transit_timestamp
         render_site(
             site_path,
             title=config.site_title,
@@ -401,11 +475,20 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
                 profile_mark=str(profile.get("mark", "XI·1")),
                 profile_class_id=str(profile.get("class_id", "61")),
                 publish_wake=False,
+                transit_wake=profile.get("transit_wake") if isinstance(profile.get("transit_wake"), dict) else None,
             )
         print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes
     except (GitHubError, CalendarFormatError, SyncFailure, ShahafSourceError, ValueError) as exc:
         message = str(exc)
+        # Always leave a JSON response for the isolated Shortcut, even when
+        # the main Gist/source fails before the ya1 profile loop starts.
+        ya1_wake_path = site_path / "ya1" / "wake.json"
+        ya1_wake_path.parent.mkdir(parents=True, exist_ok=True)
+        ya1_wake_path.write_text(
+            json.dumps(_stale_transit_payload(config, current, message), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         render_site(
             site_path,
             title=config.site_title,

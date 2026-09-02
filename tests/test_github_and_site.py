@@ -206,6 +206,39 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertNotIn("wake", data)
             self.assertFalse((Path(directory) / "wake.json").exists())
 
+    def test_site_publishes_only_the_ya1_transit_wake_endpoint(self) -> None:
+        transit_wake = {
+            "profile": "ya1",
+            "alarm_label": "Shahaf Ya1 Wake",
+            "shortcut_action": "set",
+            "wake_time": "06:05",
+            "route_departure": "07:20",
+            "route_arrival": "08:25",
+            "stale": False,
+        }
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Ostrovsky Grade 11-1",
+                generated_at="2026-09-02T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[],
+                profile_id="ya1",
+                profile_label="Ostrovsky Grade 11-1",
+                profile_mark="XI·1",
+                profile_class_id="61",
+                publish_wake=False,
+                transit_wake=transit_wake,
+            )
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            wake = json.loads((Path(directory) / "wake.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["transit_wake"]["alarm_label"], "Shahaf Ya1 Wake")
+            self.assertEqual(wake["route_arrival"], "08:25")
+            self.assertNotIn("wake", data)
+
     def test_wake_data_uses_first_master_lesson_minus_75_minutes(self) -> None:
         wake = build_wake_data(
             [

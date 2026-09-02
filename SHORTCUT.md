@@ -74,6 +74,44 @@ by weekday; this setup deliberately uses a one-time normal Clock alarm and
 refreshes it each morning. See Apple's [Time of Day automation guide](https://support.apple.com/en-euro/guide/shortcuts/apd932ff833f/ios)
 and [Clock alarm guide](https://support.apple.com/guide/iphone/set-an-alarm-iph2909d3a74/26/ios).
 
+## Separate יא-1 transit alarm
+
+The יא-1 transit endpoint is:
+
+`https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/wake.json`
+
+Create a second shortcut named **Refresh Ya1 Transit Wake Alarm**. It is
+intentionally separate from the main shortcut and must use the exact label
+`Shahaf Ya1 Wake`.
+
+Use these actions in order:
+
+1. **Get Contents of URL** → the יא-1 `wake.json` URL above, method `GET`.
+2. **Get Dictionary from Input**.
+3. **Get Dictionary Value** for `shortcut_action` using the dictionary from
+   step 2.
+4. **If** that value **is** `leave`, add **Stop This Shortcut** inside the If.
+5. **Find Alarms** with the filter **Label is exactly** `Shahaf Ya1 Wake`.
+6. **If** the Find Alarms result **has any value**, add **Delete Alarms** using
+   that Find Alarms result.
+7. Get the dictionary value for `shortcut_action` again, using the original
+   dictionary from step 2.
+8. **If** that value **is** `clear`, add **Stop This Shortcut** inside the If.
+9. Get the dictionary value for `wake_at`, using the original dictionary from
+   step 2.
+10. **Get Dates from Input** using the `wake_at` value.
+11. **Create Alarm** using that date, with label exactly `Shahaf Ya1 Wake` and
+    Repeat turned off.
+
+If `leave` is returned, the Shortcut stops before finding or deleting an
+alarm. If `clear` is returned, it deletes only the יא-1-labeled alarm. The
+main `Shahaf School Wake` alarm is never searched for by this Shortcut.
+
+Create two separate daily **Time of Day** automations at `05:00` and `06:45`,
+both running **Refresh Ya1 Transit Wake Alarm**. Turn off **Ask Before
+Running** / choose **Run Immediately** where iOS offers that option. Keep the
+existing 07:15 backup alarm enabled while testing.
+
 ## Test safely
 
 Run the Shortcut manually once while the backup alarm remains enabled. On a

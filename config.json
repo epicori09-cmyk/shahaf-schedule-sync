@@ -8,6 +8,21 @@
   "lookahead_days": 21,
   "site_title": "Shahaf Schedule Changes — Ostrovsky Grade 11-2",
   "site_dir": "site",
+  "transit": {
+    "enabled": true,
+    "gtfs_url": "https://gtfs.mot.gov.il/gtfsfiles/israel-public-transportation.zip",
+    "origin_address": "מרדכי זעירא 5, רעננה",
+    "destination_address": "אוסטרובסקי 26, רעננה",
+    "origin_coordinates": {
+      "lat": 32.1965369,
+      "lon": 34.8627789
+    },
+    "destination_coordinates": {
+      "lat": 32.1779021,
+      "lon": 34.8738483
+    },
+    "max_walk_m": 1800
+  },
   "additional_profiles": [
     {
       "id": "ya1",
