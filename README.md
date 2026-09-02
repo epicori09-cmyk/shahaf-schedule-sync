@@ -70,3 +70,11 @@ python -m shahaf_sync --dry-run
 ```
 
 The dry run reads the live public source and Gist but does not call the Gist update endpoint.
+
+## Free iPhone wake alarm
+
+The Master יא-2 profile also publishes a safe wake payload at
+`site/wake.json`. It contains the next valid school day, the first confirmed
+lesson, and the wake time 75 minutes earlier. Stale or unavailable data sets a
+fallback status and disables the payload so an iPhone Shortcut can leave the
+existing alarm unchanged. The complete setup is in [`SHORTCUT.md`](SHORTCUT.md).

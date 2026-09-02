@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from html import escape
 import json
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .ics import Calendar, IcsEvent
 from .model import PERIOD_TIMES
@@ -183,6 +184,71 @@ def _period_metadata() -> list[dict[str, Any]]:
     ]
 
 
+def build_wake_data(
+    schedule: list[dict[str, Any]] | None,
+    *,
+    schedule_available: bool,
+    stale: bool,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Build the safe, master-profile-only input for the iPhone Shortcut."""
+
+    base: dict[str, Any] = {
+        "next_school_day": None,
+        "wake_time": None,
+        "wake_at": None,
+        "subject": None,
+        "enabled": False,
+        "alarm_for_today": False,
+        "stale": stale,
+        "fallback_status": "none",
+        "timezone": "Asia/Jerusalem",
+    }
+    if stale:
+        base["fallback_status"] = "stale"
+        return base
+    if not schedule_available or schedule is None:
+        base["stale"] = True
+        base["fallback_status"] = "unavailable"
+        return base
+
+    zone = ZoneInfo("Asia/Jerusalem")
+    current = now or datetime.now(zone)
+    current = current.astimezone(zone) if current.tzinfo else current.replace(tzinfo=zone)
+    today = current.date()
+    by_date: dict[date, list[dict[str, Any]]] = {}
+    for item in schedule:
+        try:
+            item_date = date.fromisoformat(str(item["date"]))
+            time.fromisoformat(str(item["start"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if item_date >= today:
+            by_date.setdefault(item_date, []).append(item)
+
+    for school_day in sorted(by_date):
+        first = min(by_date[school_day], key=lambda item: (item["start"], item.get("period", 0)))
+        first_start = time.fromisoformat(str(first["start"]))
+        wake_naive = datetime.combine(school_day, first_start) - timedelta(minutes=75)
+        wake_local = wake_naive.replace(tzinfo=zone)
+        if school_day == today and wake_local <= current:
+            continue
+        base.update(
+            {
+                "next_school_day": school_day.isoformat(),
+                "wake_time": wake_local.strftime("%H:%M"),
+                "wake_at": wake_local.isoformat(),
+                "subject": str(first.get("subject", "")),
+                "enabled": True,
+                "alarm_for_today": school_day == today,
+            }
+        )
+        return base
+
+    base["fallback_status"] = "no-lessons"
+    return base
+
+
 def render_site(
     output_dir: Path,
     *,
@@ -258,8 +324,18 @@ def render_site(
         "exams_available": exams is not None,
         "profiles": profile_data,
     }
+    wake_data = build_wake_data(
+        schedule_data,
+        schedule_available=schedule is not None,
+        stale=stale,
+        now=now,
+    )
+    data["wake"] = wake_data
     (output_dir / "data.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    (output_dir / "wake.json").write_text(
+        json.dumps(wake_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
     status = (

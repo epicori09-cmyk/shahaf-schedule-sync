@@ -10,7 +10,7 @@ from urllib.request import Request
 from shahaf_sync.github import GistClient, GitHubError
 from shahaf_sync.model import Exam
 from shahaf_sync.reconcile import ChangeRecord
-from shahaf_sync.site import render_site
+from shahaf_sync.site import build_wake_data, render_site
 
 
 class FakeTransport:
@@ -210,6 +210,76 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("ya1-physics-cs10", html)
             self.assertEqual(data["profiles"][1]["mark"], "XI·1")
             self.assertEqual(data["profiles"][1]["schedule"][0]["teacher"], "שגיא גיא")
+
+    def test_wake_data_uses_first_master_lesson_minus_75_minutes(self) -> None:
+        wake = build_wake_data(
+            [
+                {"date": "2026-09-03", "period": 1, "start": "08:30", "subject": "Math"},
+                {"date": "2026-09-03", "period": 4, "start": "10:45", "subject": "English"},
+            ],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["next_school_day"], "2026-09-03")
+        self.assertEqual(wake["wake_time"], "07:15")
+        self.assertEqual(wake["subject"], "Math")
+        self.assertTrue(wake["enabled"])
+        self.assertTrue(wake["alarm_for_today"])
+        self.assertEqual(wake["fallback_status"], "none")
+
+    def test_wake_data_skips_a_passed_wake_time_and_handles_no_school(self) -> None:
+        wake = build_wake_data(
+            [
+                {"date": "2026-09-03", "period": 0, "start": "07:45", "subject": "Math"},
+                {"date": "2026-09-06", "period": 1, "start": "08:30", "subject": "English"},
+            ],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 3, 6, 45, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["next_school_day"], "2026-09-06")
+        self.assertFalse(wake["alarm_for_today"])
+        self.assertTrue(wake["enabled"])
+
+        no_school = build_wake_data(
+            [],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertFalse(no_school["enabled"])
+        self.assertEqual(no_school["fallback_status"], "no-lessons")
+
+    def test_wake_data_marks_stale_without_a_destructive_fallback(self) -> None:
+        wake = build_wake_data(
+            None,
+            schedule_available=False,
+            stale=True,
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertFalse(wake["enabled"])
+        self.assertTrue(wake["stale"])
+        self.assertEqual(wake["fallback_status"], "stale")
+
+    def test_render_site_writes_public_wake_endpoint(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-03T05:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[
+                    {"date": "2026-09-03", "period": 1, "subject": "Math", "start": "08:30", "end": "09:10"}
+                ],
+                now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+            )
+            wake = json.loads((Path(directory) / "wake.json").read_text(encoding="utf-8"))
+            self.assertEqual(wake["wake_time"], "07:15")
+            self.assertEqual(wake["subject"], "Math")
 
 
 if __name__ == "__main__":

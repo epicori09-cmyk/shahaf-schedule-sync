@@ -5,3 +5,4 @@ htmlcov/
 .venv/
 coverage.xml
 site/data.json
+site/wake.json
