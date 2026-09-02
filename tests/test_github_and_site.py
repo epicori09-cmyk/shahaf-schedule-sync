@@ -138,7 +138,18 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('touchstart', html)
             self.assertIn('touchend', html)
             self.assertIn('Math.abs(dx)', html)
+            self.assertIn('id="settings-view"', html)
+            self.assertNotIn('id="settings-tab"', html)
+            self.assertIn('profile-select', html)
+            self.assertIn('skeleton', html)
+            self.assertIn('["now", "full", "exams", "settings"]', html)
             self.assertEqual(len(data["periods"]), 14)
+
+    def test_service_worker_caches_data_for_weak_connection(self) -> None:
+        service_worker = (Path(__file__).parents[1] / "site" / "sw.js").read_text(encoding="utf-8")
+        self.assertIn('"./data.json"', service_worker)
+        self.assertIn("CACHE_NAME = \"shahaf-schedule-v3\"", service_worker)
+        self.assertIn("cache.put(request, response.clone())", service_worker)
 
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:
         with TemporaryDirectory() as directory:
