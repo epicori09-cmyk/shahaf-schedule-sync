@@ -228,6 +228,7 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("אורי המלך", ya1_html)
             self.assertNotIn("localStorage", ya1_html)
             self.assertNotIn("<script>\n<script>", ya1_html)
+            self.assertIn(".site-access-gate[hidden]{display:none}", ya1_html)
 
             render_site(
                 Path(directory) / "master",
