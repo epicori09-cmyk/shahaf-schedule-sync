@@ -8,6 +8,7 @@ import unittest
 from urllib.request import Request
 
 from shahaf_sync.github import GistClient, GitHubError
+from shahaf_sync.model import Exam
 from shahaf_sync.reconcile import ChangeRecord
 from shahaf_sync.site import render_site
 
@@ -138,6 +139,25 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('touchend', html)
             self.assertIn('Math.abs(dx)', html)
             self.assertEqual(len(data["periods"]), 14)
+
+    def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-02T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                exams=[Exam(date(2026, 9, 6), "מתמטיקה 5 יח״ל מואץ", 4, 6)],
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertIn("Exams", html)
+            self.assertIn("4 days before", html)
+            self.assertEqual(data["exams"][0]["reminder_date"], "2026-09-02")
+            self.assertTrue(data["exams_available"])
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@ Daily, fail-closed synchronization from Ostrovsky’s public Shahaf timetable in
 
 ## Source and target
 
-- Shahaf source: `https://ostrovsky.shahaf.site/?cls=17&tab=changes`
-- Class: `י״א 8` (`cls=17`)
+- Shahaf source: `https://ostrovsky.shahaf.site/?cls=11&tab=changes`
+- Class: `י״א 2` (`cls=11`)
 - Target Gist: `a5891b76daf585d0953bc96958819fdf`, file `school.ics`
 - iPhone subscription URL: `https://gist.githubusercontent.com/epicori09-cmyk/a5891b76daf585d0953bc96958819fdf/raw/school.ics`
 
@@ -25,7 +25,7 @@ feed is a successful no-op; an unknown non-empty schema is a safe failure.
 
 The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
 
-The site has two views: **Now** shows the current and next lesson, while **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
+The site has three swipeable views: **Now** shows the current and next lesson, **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps, and **Exams** shows the selected subjects with a calendar alert four days before at 19:00. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
 
 ## Screenshot timetable migration
 

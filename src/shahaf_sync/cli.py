@@ -11,10 +11,11 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from .github import GistClient, GitHubError
+from .exams import reconcile_exam_events
 from .ics import CalendarFormatError, parse_calendar
 from .model import SourceSnapshot
 from .reconcile import ChangeRecord, reconcile_calendar
-from .shahaf import ShahafSourceError, parse_changes_html
+from .shahaf import ShahafSourceError, parse_changes_html, parse_exams_html
 from .site import build_schedule, render_site
 
 
@@ -32,6 +33,7 @@ class Config:
     lookahead_days: int
     site_title: str
     site_dir: str
+    class_number: int = 2
 
 
 def load_config(path: Path) -> Config:
@@ -40,7 +42,7 @@ def load_config(path: Path) -> Config:
     missing = [key for key in required if key not in data]
     if missing:
         raise SyncFailure(f"Missing config keys: {', '.join(missing)}")
-    return Config(*(data[key] for key in required))
+    return Config(*(data[key] for key in required), int(data.get("class_number", 2)))
 
 
 def fetch_text(url: str) -> str:
@@ -61,6 +63,21 @@ def fetch_source(config: Config, today: date) -> tuple[SourceSnapshot, list[str]
         return parse_changes_html(html, today, url, expected_class_id=config.class_id), [url]
     except (ShahafSourceError, SyncFailure) as exc:
         raise SyncFailure(f"Shahaf changes feed is not trustworthy: {exc}") from exc
+
+
+def fetch_exams(config: Config, today: date):
+    url = f"{config.source_base_url}?cls={config.class_id}&tab=exams"
+    try:
+        html = fetch_text(url)
+        return parse_exams_html(
+            html,
+            today,
+            url,
+            expected_class_number=config.class_number,
+            expected_class_id=config.class_id,
+        )
+    except (ShahafSourceError, SyncFailure) as exc:
+        raise SyncFailure(f"Shahaf exams feed is not trustworthy: {exc}") from exc
 
 
 def _now(config: Config) -> datetime:
@@ -89,12 +106,14 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
         gist_file = client.read_file(config.gist_id, config.gist_filename)
         calendar = parse_calendar(gist_file.content)
         snapshot, _urls = fetch_source(config, current.date())
+        exam_snapshot = fetch_exams(config, current.date())
         changes = reconcile_calendar(
             calendar,
             snapshot,
             current.date(),
             current.date() + timedelta(days=config.lookahead_days),
         )
+        reconcile_exam_events(calendar, exam_snapshot.exams)
         updated_content = calendar.render()
         if updated_content != gist_file.content and not dry_run:
             client.update_file(config.gist_id, config.gist_filename, updated_content)
@@ -113,9 +132,10 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             stale=False,
             last_successful_sync=current.isoformat(),
             schedule=schedule,
+            exams=exam_snapshot.exams,
             now=current,
         )
-        print(f"Sync complete: {len(changes)} change(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
+        print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes
     except (GitHubError, CalendarFormatError, SyncFailure, ShahafSourceError, ValueError) as exc:
         message = str(exc)

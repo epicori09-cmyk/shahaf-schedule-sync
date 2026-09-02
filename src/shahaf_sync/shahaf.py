@@ -6,7 +6,7 @@ from html.parser import HTMLParser
 import re
 from dataclasses import dataclass, field
 
-from .model import Lesson, PublishedChange, SourceSnapshot
+from .model import Exam, ExamSnapshot, Lesson, PERIOD_TIMES, PublishedChange, SourceSnapshot
 
 
 class ShahafSourceError(ValueError):
@@ -406,6 +406,175 @@ def parse_changes_html(
         source_url=source_url,
         changes=changes,
     )
+
+
+def _class_number_includes(value: str, expected_class_number: int) -> bool:
+    """Match Hebrew 11th-grade class lists, including compact ranges."""
+    text = unescape(value).casefold().replace("\u00a0", " ")
+    numbers = {int(item) for item in re.findall(r"יא\s*[-–]?\s*(\d+)", text)}
+    if expected_class_number in numbers:
+        return True
+    for first, last in re.findall(
+        r"יא\s*[-–]?\s*(\d+)\s*\.\.\.\s*יא\s*[-–]?\s*(\d+)", text
+    ):
+        if int(first) <= expected_class_number <= int(last):
+            return True
+    return False
+
+
+def _exam_subject(title: str) -> str | None:
+    value = re.sub(r"^\s*מבחן(?:\s+פתיחת\s+שנה|\s+מעבר)?\s*(?:ב|ב-)?\s*", "", title).strip()
+    normalized = value.casefold().replace('"', "").replace("׳", "'")
+    if "מתמטיקה" in normalized:
+        if re.search(r"(?:4\s*יח|4\s*יח|4\s*units)", normalized):
+            return None
+        return "מתמטיקה 5 יח״ל מואץ"
+    if "אנגלית" in normalized:
+        if re.search(r"(?:4\s*יח|4\s*units)", normalized):
+            return None
+        if "5" not in normalized and "מואץ" not in normalized:
+            return None
+        return "אנגלית 5 יח״ל מואץ"
+    if "מדמ" in normalized or "מדעי המחשב" in normalized:
+        return "מדעי המחשב 1"
+    for needle, subject in (
+        ("ספרות", "ספרות"),
+        ("היסטוריה", "היסטוריה"),
+        ("עברית", "עברית"),
+        ("תנך", "תנ״ך"),
+        ("תנ'ך", "תנ״ך"),
+        ("דיפלומטיה", "דיפלומטיה"),
+        ("סייבר", "סייבר — טלפונים חכמים"),
+    ):
+        if needle in normalized:
+            return subject
+    return None
+
+
+_PERSONAL_EXAM_TEACHERS: dict[str, tuple[str, ...]] = {
+    "מתמטיקה 5 יח״ל מואץ": ("אפי כהן",),
+    "אנגלית 5 יח״ל מואץ": ("אירין שפינל",),
+    "מדעי המחשב 1": ("שמרת מן",),
+    "דיפלומטיה": ("אורית גרינברג",),
+    "סייבר — טלפונים חכמים": ("רועי ויסברט",),
+    "הערכה חלופית — מדעי המחשב 1": ("רועי ויסברט",),
+    "ספרות": ("דנה לילקובסקי",),
+    "עברית": ("לימור חן",),
+    "תנ״ך": ("דוד לוי",),
+    "היסטוריה": ("ירון דור",),
+}
+
+
+def _detail_tokens(value: str) -> set[str]:
+    return set(re.findall(r"[\wא-ת]+", unescape(value).casefold(), flags=re.UNICODE))
+
+
+def _exam_belongs_to_personal_track(subject: str, title: str, group: str) -> bool:
+    """Use Shahaf's group teacher to avoid importing another major's exam."""
+    if not group:
+        return True
+    group_tokens = _detail_tokens(group)
+    teacher_matches = [
+        teacher
+        for teacher in _PERSONAL_EXAM_TEACHERS.get(subject, ())
+        if _detail_tokens(teacher) <= group_tokens
+    ]
+    if teacher_matches:
+        return True
+    # Shahaf sometimes labels a common grade-wide test with the subject itself
+    # instead of a teacher. This is safe only for generic Math/English rows;
+    # majors and elective tracks must remain teacher-specific.
+    generic_term = "מתמטיקה" if subject.startswith("מתמטיקה") else "אנגלית"
+    # The title often contains the Hebrew prefix ב־ (for example,
+    # "מבחן במתמטיקה"), so token equality is too strict here.
+    normalized_group = unescape(group).casefold()
+    normalized_title = unescape(title).casefold()
+    return (
+        subject.startswith(("מתמטיקה", "אנגלית"))
+        and generic_term in normalized_group
+        and generic_term in normalized_title
+    )
+
+
+def parse_exams_html(
+    html: str,
+    reference_date: date,
+    source_url: str = "",
+    expected_class_number: int = 2,
+    expected_class_id: str = "11",
+) -> ExamSnapshot:
+    """Parse Shahaf's class-filtered exam list into personal exam records."""
+    parser = _TreeParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception as exc:
+        raise ShahafSourceError(f"Shahaf exams page is malformed: {exc}") from exc
+
+    select_match = re.search(
+        r"<select\b[^>]*\bname=[\"']cls[\"'][^>]*>(.*?)</select>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if select_match:
+        selected_class = any(
+            re.search(rf"\bvalue=[\"']{re.escape(expected_class_id)}[\"']", attrs, re.IGNORECASE)
+            and re.search(r"\bselected(?:\s*=|\b)", attrs, re.IGNORECASE)
+            for attrs in re.findall(r"<option\b([^>]*)>", select_match.group(1), flags=re.IGNORECASE)
+        )
+        if not selected_class:
+            raise ShahafSourceError(f"Shahaf exams page is not selected for class {expected_class_id}")
+
+    update_match = re.search(
+        r"<div[^>]*class=[\"'][^\"']*UpdateDate[^\"']*[\"'][^>]*>(.*?)</div>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    update_text = _plain(update_match.group(1)) if update_match else ""
+    if not update_text:
+        raise ShahafSourceError("Shahaf exams page has no update timestamp")
+
+    rows = [
+        node
+        for node in _walk(parser.root)
+        if node.tag == "li" and "changesinfo" in _class_value(node)
+    ]
+    page_text = _plain(html)
+    if not rows:
+        if "אין מבחנים" in page_text or re.search(r"class=[\"'][^\"']*EmptyList", html, re.IGNORECASE):
+            return ExamSnapshot([], update_text, source_url)
+        raise ShahafSourceError("Shahaf exams page has no recognized exam list")
+
+    exams: dict[tuple[date, str, int, int], Exam] = {}
+    for row in rows:
+        # _node_text intentionally gathers nested text for display, but that
+        # reorders the <b> title after direct row text. Parse metadata from the
+        # row's own text and take the exam title from its bold child.
+        metadata_text = row.text()
+        text = _node_text(row)
+        date_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", metadata_text)
+        period_match = re.search(r"משיעור\s*(\d+)\s*עד\s*שיעור\s*(\d+)", metadata_text)
+        title = _first_tag_value(row, "b")
+        class_match = re.search(r"לכיתות:\s*(.*?)(?:\s+בקבוצה\s+של\s+|$)", metadata_text)
+        if not date_match or not period_match or not title or not class_match:
+            raise ShahafSourceError(f"Shahaf exam row has unsupported format: {text!r}")
+        if not _class_number_includes(class_match.group(1), expected_class_number):
+            continue
+        subject = _exam_subject(title)
+        if subject is None:
+            continue
+        exam_date = date(int(date_match.group(3)), int(date_match.group(2)), int(date_match.group(1)))
+        start_period, end_period = int(period_match.group(1)), int(period_match.group(2))
+        if start_period not in PERIOD_TIMES or end_period not in PERIOD_TIMES or start_period > end_period:
+            raise ShahafSourceError(f"Shahaf exam row has invalid period range: {text!r}")
+        group_match = re.search(r"בקבוצה\s+של\s+(.+)$", metadata_text)
+        group = group_match.group(1).strip() if group_match else ""
+        if not _exam_belongs_to_personal_track(subject, title, group):
+            continue
+        key = (exam_date, subject, start_period, end_period)
+        exams.setdefault(key, Exam(exam_date, subject, start_period, end_period, text, group))
+
+    return ExamSnapshot(sorted(exams.values(), key=lambda item: (item.date, item.start_period, item.subject)), update_text, source_url)
 
 
 def merge_snapshots(snapshots: list[SourceSnapshot]) -> SourceSnapshot:

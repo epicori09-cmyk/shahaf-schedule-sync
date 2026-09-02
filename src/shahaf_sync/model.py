@@ -52,6 +52,23 @@ class PublishedChange:
 
 
 @dataclass(frozen=True, slots=True)
+class Exam:
+    date: date
+    subject: str
+    start_period: int
+    end_period: int
+    detail: str = ""
+    group: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ExamSnapshot:
+    exams: list[Exam]
+    update_text: str
+    source_url: str
+
+
+@dataclass(frozen=True, slots=True)
 class SourceSnapshot:
     lessons: list[Lesson]
     covered_dates: set[date]
