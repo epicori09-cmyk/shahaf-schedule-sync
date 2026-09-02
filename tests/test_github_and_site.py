@@ -226,6 +226,7 @@ class GithubAndSiteTests(unittest.TestCase):
             ya1_html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             self.assertIn("site-access-gate", ya1_html)
             self.assertIn("אורי המלך", ya1_html)
+            self.assertNotIn("localStorage", ya1_html)
 
             render_site(
                 Path(directory) / "master",
