@@ -227,6 +227,7 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertTrue(wake["enabled"])
         self.assertTrue(wake["alarm_for_today"])
         self.assertEqual(wake["fallback_status"], "none")
+        self.assertEqual(wake["shortcut_action"], "set")
 
     def test_wake_data_skips_a_passed_wake_time_and_handles_no_school(self) -> None:
         wake = build_wake_data(
@@ -241,6 +242,7 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertEqual(wake["next_school_day"], "2026-09-06")
         self.assertFalse(wake["alarm_for_today"])
         self.assertTrue(wake["enabled"])
+        self.assertEqual(wake["shortcut_action"], "clear")
 
         no_school = build_wake_data(
             [],
@@ -250,6 +252,7 @@ class GithubAndSiteTests(unittest.TestCase):
         )
         self.assertFalse(no_school["enabled"])
         self.assertEqual(no_school["fallback_status"], "no-lessons")
+        self.assertEqual(no_school["shortcut_action"], "clear")
 
     def test_wake_data_marks_stale_without_a_destructive_fallback(self) -> None:
         wake = build_wake_data(
@@ -261,6 +264,7 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertFalse(wake["enabled"])
         self.assertTrue(wake["stale"])
         self.assertEqual(wake["fallback_status"], "stale")
+        self.assertEqual(wake["shortcut_action"], "leave")
 
     def test_render_site_writes_public_wake_endpoint(self) -> None:
         with TemporaryDirectory() as directory:

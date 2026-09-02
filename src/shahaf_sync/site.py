@@ -202,6 +202,10 @@ def build_wake_data(
         "alarm_for_today": False,
         "stale": stale,
         "fallback_status": "none",
+        # A text-only instruction for the iPhone Shortcut.  Text comparisons
+        # are substantially less error-prone in the Shortcuts editor than
+        # Boolean magic variables.
+        "shortcut_action": "leave",
         "timezone": "Asia/Jerusalem",
     }
     if stale:
@@ -241,11 +245,13 @@ def build_wake_data(
                 "subject": str(first.get("subject", "")),
                 "enabled": True,
                 "alarm_for_today": school_day == today,
+                "shortcut_action": "set" if school_day == today else "clear",
             }
         )
         return base
 
     base["fallback_status"] = "no-lessons"
+    base["shortcut_action"] = "clear"
     return base
 
 

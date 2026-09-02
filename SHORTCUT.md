@@ -25,31 +25,32 @@ Add these actions in order:
    - URL: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/wake.json`
    - Method: `GET`
 2. **Get Dictionary from Input**.
-3. **Get Dictionary Value** for `stale`.
-4. **If** `stale` is `true`, add **Stop This Shortcut**.
-5. Get the dictionary value for `fallback_status`.
-6. Add two safety checks: if `fallback_status` is `stale` or `unavailable`, use
-   **Stop This Shortcut**. Do not find or delete any alarm before these checks.
-7. Get the dictionary value for `enabled`.
-8. Get the dictionary value for `alarm_for_today`.
-9. **Find All Alarms**. Add a filter so **Label is exactly**
-   `Shahaf School Wake`.
-10. **Delete Alarms**, using the result of the filtered Find action.
-11. **If** `enabled` is not `true`, use **Stop This Shortcut**. This is the
-    no-lessons path: only the labeled school alarm has been removed.
-12. **If** `alarm_for_today` is not `true`, use **Stop This Shortcut**. This
-    prevents a 05:00 run on a non-school day from creating an alarm for the
-    wrong calendar day.
-13. Get the dictionary value for `wake_at`.
-14. Use **Get Dates from Input** (called **Get Date from Input** on some iOS
-    versions) to turn `wake_at` into a Date.
-15. **Create Alarm** using that Date/time and set its label to exactly
-    `Shahaf School Wake`. Leave Repeat off.
+3. **Get Dictionary Value** for `shortcut_action` (using the Dictionary output
+   from step 2).
+4. Add **If**. Its left value is the result of step 3; set the condition to
+   `is` and type `leave`. Inside the block, add **Stop Shortcut** (shown as
+   **Stop This Shortcut** on some iOS versions).
+5. **Find Alarm** (shown as **Find Alarms** on some iOS versions). Add a
+   filter so **Label is exactly** `Shahaf School Wake`.
+6. Add **If** with the Find result and condition `has any value`. Inside it,
+   add **Delete Alarms** using the Find result.
+7. Get the dictionary value for `shortcut_action` again, using the Dictionary
+   output from step 2.
+8. Add **If**. Set it to `shortcut_action is clear`; inside it add
+   **Stop Shortcut**.
+9. Get the dictionary value for `wake_at`, using the Dictionary output from
+   step 2.
+10. Use **Get Dates from Input** to turn `wake_at` into a Date.
+11. **Add Alarm** (shown as **Create Alarm** on some iOS versions) using that
+    Date/time. Set its label to exactly `Shahaf School Wake`; leave Repeat off.
 
-The important order is: stale checks first, then delete only the exact label,
-then create the replacement only when the endpoint says the alarm is for
-today. A stale or unavailable endpoint therefore leaves the current alarm
-untouched.
+`shortcut_action` is deliberately plain text so the Shortcut avoids fragile
+Boolean pickers:
+
+- `leave`: Shahaf data is stale or unavailable. Stop before touching alarms.
+- `clear`: no school today, or the wake time has already passed. Delete only
+  the labeled school alarm, then stop.
+- `set`: a valid school-day wake alarm should be created.
 
 ## Add the automatic triggers
 
