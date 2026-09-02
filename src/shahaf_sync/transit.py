@@ -28,6 +28,7 @@ DEFAULT_GTFS_URL = "https://gtfs.mot.gov.il/gtfsfiles/israel-public-transportati
 ORIGIN_ADDRESS = "מרדכי זעירא 5, רעננה"
 DESTINATION_ADDRESS = "אוסטרובסקי 26, רעננה"
 YA1_ALARM_LABEL = "Shahaf Ya1 Wake"
+MIN_ORIGIN_WALK_MINUTES = 5
 
 
 class TransitSourceError(RuntimeError):
@@ -112,9 +113,15 @@ def _walk_minutes(distance_m: float) -> int:
     return int(math.ceil(distance_m / 75.0))
 
 
-def _nearby_stops(schedule: TransitSchedule, point: tuple[float, float], max_walk_m: int) -> list[tuple[str, int]]:
+def _nearby_stops(
+    schedule: TransitSchedule,
+    point: tuple[float, float],
+    max_walk_m: int,
+    *,
+    minimum_walk_minutes: int = 0,
+) -> list[tuple[str, int]]:
     candidates = [
-        (stop_id, _walk_minutes(_distance_m(point, (stop.lat, stop.lon))))
+        (stop_id, max(minimum_walk_minutes, _walk_minutes(_distance_m(point, (stop.lat, stop.lon)))))
         for stop_id, stop in schedule.stops.items()
         if _distance_m(point, (stop.lat, stop.lon)) <= max_walk_m
     ]
@@ -144,7 +151,12 @@ def plan_route(
 ) -> TransitRoute | None:
     """Find the latest route whose final walk ends by ``arrival_deadline``."""
 
-    origin_stops = _nearby_stops(schedule, origin, max_walk_m)
+    origin_stops = _nearby_stops(
+        schedule,
+        origin,
+        max_walk_m,
+        minimum_walk_minutes=MIN_ORIGIN_WALK_MINUTES,
+    )
     destination_stops = dict(_nearby_stops(schedule, destination, max_walk_m))
     if not origin_stops or not destination_stops:
         return None

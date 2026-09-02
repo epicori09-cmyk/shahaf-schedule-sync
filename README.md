@@ -53,7 +53,10 @@ own scheduled-transit payload at
 `https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/wake.json`. It uses
 the free Israeli Ministry of Transport GTFS feed, selects the latest route
 that reaches Ostrovsky at least five minutes before the first confirmed יא-1
-lesson, and calculates wake-up 75 minutes before leaving home. Its Shortcut
+lesson, and calculates wake-up 75 minutes before leaving home. The page shows
+the selected bus line, stops, walking legs, and scheduled times; it budgets at
+least five minutes to walk from home to the first stop and considers earlier
+departures when a later bus would not arrive safely. Its Shortcut
 uses the separate `Shahaf Ya1 Wake` label. Scheduled transit data does not
 predict live delays; the endpoint returns `leave` when route data is stale,
 malformed, or no safe route is available. It cannot change the יא-2 Gist or
