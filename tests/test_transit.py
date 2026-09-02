@@ -178,6 +178,7 @@ class TransitWakeTests(unittest.TestCase):
             now=datetime(2026, 9, 5, 12, 0),
             origin=ORIGIN,
             destination=DESTINATION,
+            max_walk_m=100,
         )
         self.assertEqual(result["shortcut_action"], "set")
         self.assertEqual(result["route_arrival"], "07:38")
