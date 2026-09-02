@@ -206,6 +206,41 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertNotIn("wake", data)
             self.assertFalse((Path(directory) / "wake.json").exists())
 
+    def test_ya1_site_has_a_simple_phrase_gate_but_master_does_not(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Ostrovsky Grade 11-1",
+                generated_at="2026-09-02T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[],
+                profile_id="ya1",
+                profile_label="Ostrovsky Grade 11-1",
+                profile_mark="XI·1",
+                profile_class_id="61",
+                publish_wake=False,
+            )
+            ya1_html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            self.assertIn("site-access-gate", ya1_html)
+            self.assertIn("אורי המלך", ya1_html)
+
+            render_site(
+                Path(directory) / "master",
+                title="Master",
+                generated_at="2026-09-02T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[],
+                profile_id="master-ya2",
+            )
+            master_html = (Path(directory) / "master" / "index.html").read_text(encoding="utf-8")
+            self.assertNotIn("site-access-gate", master_html)
+
     def test_site_publishes_only_the_ya1_transit_wake_endpoint(self) -> None:
         transit_wake = {
             "profile": "ya1",
