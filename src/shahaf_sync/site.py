@@ -13,6 +13,14 @@ from .reconcile import ChangeRecord
 
 
 def _record_to_dict(record: ChangeRecord) -> dict[str, Any]:
+    if isinstance(record, dict):
+        return {
+            "kind": str(record.get("kind", "changed")),
+            "date": str(record.get("date", "")),
+            "period": int(record.get("period", 0)),
+            "subject": str(record.get("subject", "Schedule update")),
+            "detail": str(record.get("detail", "")),
+        }
     return {
         "kind": record.kind,
         "date": record.date.isoformat(),
@@ -23,6 +31,22 @@ def _record_to_dict(record: ChangeRecord) -> dict[str, Any]:
 
 
 def _exam_to_dict(exam: Exam) -> dict[str, Any]:
+    if isinstance(exam, dict):
+        exam_date = str(exam.get("date", ""))
+        try:
+            reminder_date = (date.fromisoformat(exam_date) - timedelta(days=4)).isoformat()
+        except ValueError:
+            reminder_date = ""
+        return {
+            "date": exam_date,
+            "subject": str(exam.get("subject", "")),
+            "start_period": int(exam.get("start_period", 0)),
+            "end_period": int(exam.get("end_period", 0)),
+            "detail": str(exam.get("detail", "")),
+            "group": str(exam.get("group", "")),
+            "reminder_date": str(exam.get("reminder_date", "")) or reminder_date,
+            "reminder_time": str(exam.get("reminder_time", "19:00")),
+        }
     return {
         "date": exam.date.isoformat(),
         "subject": exam.subject,
@@ -173,12 +197,51 @@ def render_site(
     schedule: list[dict[str, Any]] | None = None,
     exams: list[Exam] | None = None,
     now: datetime | None = None,
+    profiles: list[dict[str, Any]] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     schedule_data = schedule or []
     visible_changes = [item for item in changes if not _change_is_past(item, now)]
     periods = _period_metadata()
     exams_data = [_exam_to_dict(item) for item in (exams or [])]
+    primary_profile = {
+        "id": "master",
+        "label": "Master profile — יא-2",
+        "mark": "XI·2",
+        "class_id": "11",
+        "schedule": schedule_data,
+        "schedule_available": schedule is not None,
+        "changes": [_record_to_dict(item) for item in changes],
+        "exams": exams_data,
+        "exams_available": exams is not None,
+        "source_url": source_url,
+        "source_updated": source_updated,
+        "last_successful_sync": last_successful_sync,
+        "stale": stale,
+        "error": error,
+        "generated_at": generated_at,
+    }
+    profile_data = [primary_profile]
+    for item in profiles or []:
+        if not isinstance(item, dict) or item.get("id") == "master":
+            continue
+        normalized = dict(item)
+        normalized["changes"] = [
+            _record_to_dict(value) for value in item.get("changes", [])
+        ]
+        normalized["exams"] = [
+            _exam_to_dict(value) for value in item.get("exams", [])
+        ]
+        normalized.setdefault("schedule", [])
+        normalized.setdefault("schedule_available", bool(normalized["schedule"]))
+        normalized.setdefault("exams_available", True)
+        normalized.setdefault("source_url", source_url)
+        normalized.setdefault("source_updated", "")
+        normalized.setdefault("last_successful_sync", "")
+        normalized.setdefault("stale", False)
+        normalized.setdefault("error", "")
+        profile_data.append(normalized)
+
     data = {
         "title": title,
         "generated_at": generated_at,
@@ -193,59 +256,33 @@ def render_site(
         "periods": periods,
         "exams": exams_data,
         "exams_available": exams is not None,
+        "profiles": profile_data,
     }
     (output_dir / "data.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
     status = (
-        '<div class="status stale"><span class="status-dot"></span><span>Sync needs attention</span></div>'
+        '<div id="sync-status" class="status stale"><span class="status-dot"></span><span>Sync needs attention</span></div>'
         if stale
-        else '<div class="status"><span class="status-dot"></span><span>Synced</span></div>'
+        else '<div id="sync-status" class="status"><span class="status-dot"></span><span>Synced</span></div>'
     )
     if error:
         status += f'<details class="error"><summary>Error details</summary><pre>{escape(error)}</pre></details>'
 
-    if visible_changes:
-        rows = []
-        for item in visible_changes:
-            label, css_kind = _kind_label(item.kind)
-            detail = item.detail or "Schedule update"
-            rows.append(
-                f'''<article class="change-row {css_kind}">
-  <div class="change-date"><strong>{escape(_pretty_date(item.date.isoformat()))}</strong><span>Period {item.period}</span></div>
-  <div class="change-body"><div><span class="change-label">{escape(label)}</span><h3>{escape(item.subject)}</h3></div><p>{escape(detail)}</p></div>
-</article>'''
-            )
-        changes_html = f'''<section class="changes" id="changes-view" aria-labelledby="changes-title"><div class="section-title"><h2 id="changes-title">Changes</h2><span>{len(visible_changes)}</span></div><div class="change-list">{"".join(rows)}</div></section>'''
-    else:
-        changes_html = '''<section class="changes" id="changes-view" aria-labelledby="changes-title"><div class="section-title"><h2 id="changes-title">Changes</h2><span>0</span></div><div class="quiet">No upcoming cancellations or updates.</div></section>'''
+    changes_html = '''<section class="changes" id="changes-view" aria-labelledby="changes-title"><div class="section-title"><h2 id="changes-title">Changes</h2><span id="changes-count">0</span></div><div class="change-list" id="change-list"></div></section>'''
 
-    if exams_data:
-        exam_rows = []
-        for item in exams_data:
-            period_text = str(item["start_period"])
-            if item["end_period"] != item["start_period"]:
-                period_text += f"–{item['end_period']}"
-            exam_rows.append(
-                f'''<article class="exam-row">
-  <div class="exam-date"><strong>{escape(_pretty_date(item["date"]))}</strong><span>Periods {escape(period_text)}</span></div>
-  <div class="exam-body"><h3>{escape(item["subject"])}</h3><p>Reminder: 4 days before · 7:00 PM</p></div>
-</article>'''
-            )
-        exams_html = f'''<section class="exams" id="exams-view" aria-labelledby="exams-title" hidden><div class="section-title"><h2 id="exams-title">Exams</h2><span>{len(exams_data)}</span></div><div class="exam-list">{"".join(exam_rows)}</div></section>'''
-    else:
-        exams_html = '''<section class="exams" id="exams-view" aria-labelledby="exams-title" hidden><div class="section-title"><h2 id="exams-title">Exams</h2><span>0</span></div><div class="quiet">No upcoming exams found for your subjects.</div></section>'''
+    exams_html = '''<section class="exams" id="exams-view" aria-labelledby="exams-title" hidden><div class="section-title"><h2 id="exams-title">Exams</h2><span id="exams-count">0</span></div><div class="exam-list" id="exam-list"></div></section>'''
 
     settings_html = '''<section id="settings-view" class="settings-view" hidden aria-labelledby="settings-title">
   <div class="settings-heading"><div><p class="eyebrow">Private on this device</p><h2 id="settings-title">Settings</h2></div><button id="settings-back" class="small-button" type="button">Back to now</button></div>
-  <div class="settings-card"><label class="setting-label" for="profile-select">Active profile</label><select id="profile-select" class="profile-select"></select><p class="setting-help">Your Master profile keeps the complete יא-2 timetable. Profile choices are saved only on this device.</p><div id="profile-status" class="setting-status" role="status" aria-live="polite"></div></div>
-  <form id="profile-form" class="settings-card profile-form"><label class="setting-label" for="profile-name">Add a profile</label><div class="profile-form-row"><input id="profile-name" name="profile-name" maxlength="32" placeholder="e.g. Exam focus" autocomplete="off"><button class="small-button primary-button" type="submit">Add</button></div><p class="setting-help">Profiles are local labels for now; the synced school timetable stays the same.</p></form>
+  <div class="settings-card"><label class="setting-label" for="profile-select">Active profile</label><select id="profile-select" class="profile-select"></select><p class="setting-help">Your selected profile is remembered on this device. Schedules come from the confirmed Shahaf profile configuration.</p><div id="profile-status" class="setting-status" role="status" aria-live="polite"></div></div>
   <div class="settings-card settings-facts"><div><span class="fact-label">Connection</span><strong>Offline-ready</strong></div><div><span class="fact-label">Updates</span><strong>Twice each morning</strong></div></div>
 </section>'''
 
     schedule_json = json.dumps(schedule_data, ensure_ascii=False).replace("</", "<\\/")
     periods_json = json.dumps(periods, ensure_ascii=False)
+    profile_json = json.dumps(profile_data, ensure_ascii=False).replace("</", "<\\/")
     schedule_available = "true" if schedule is not None else "false"
     sync_display = _pretty_timestamp(last_successful_sync or generated_at)
     html = f'''<!doctype html>
@@ -281,22 +318,26 @@ def render_site(
 .settings-view{{display:grid;gap:10px;margin-bottom:25px}}.settings-heading{{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:5px}}.settings-heading h2{{margin:0;font-size:34px;letter-spacing:-.06em}}.settings-card{{padding:17px;border:1px solid var(--line);border-radius:17px;background:var(--card)}}.setting-label,.fact-label{{display:block;color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}}.profile-select,.profile-form input{{width:100%;margin-top:8px;min-height:43px;border:1px solid var(--line);border-radius:11px;background:#f8faf8;color:var(--ink);font:inherit;padding:0 12px}}.setting-help{{margin:9px 0 0;color:var(--muted);font-size:12px}}.setting-status{{min-height:17px;margin-top:8px;color:var(--green);font-size:12px;font-weight:700}}.profile-form-row{{display:grid;grid-template-columns:1fr auto;gap:8px}}.profile-form input{{margin-top:8px}}.primary-button{{background:var(--ink);border-color:var(--ink);color:#fff;margin-top:8px}}.settings-facts{{display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--green-soft)}}.settings-facts strong{{display:block;margin-top:5px;font-size:14px}}
 @media (prefers-reduced-motion:reduce){{*{{transition:none!important}}}}
 </style></head><body><main class="app">
-<header class="topbar"><a class="identity" href="."><span class="mark">XI·8</span><span><strong>My schedule</strong><small>Ostrovsky High School</small></span></a><a class="source" href="{escape(source_url)}" target="_blank" rel="noreferrer" aria-label="Open Shahaf">↗</a></header>
+<header class="topbar"><a class="identity" href="."><span class="mark" id="profile-mark">XI·2</span><span><strong>My schedule</strong><small id="profile-label">Master profile — יא-2</small></span></a><a class="source" id="source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer" aria-label="Open Shahaf">↗</a></header>
 <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Full schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
 <section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p></section>
 <section id="full-view" class="full-schedule" hidden aria-labelledby="full-title"><div class="schedule-heading"><div><p class="eyebrow">Every period</p><h2 id="full-title">Full schedule</h2></div><button id="back-to-now" class="small-button" type="button">Back to now</button></div><div id="day-picker" class="day-picker" role="listbox" aria-label="Choose a school day"></div><div class="selected-day"><div><h3 id="selected-day-title">Loading…</h3><p id="selected-day-summary"></p></div><button id="jump-today" class="small-button" type="button">Today</button></div><div id="schedule-periods" class="period-list"></div></section>
 {exams_html}
 {settings_html}
 {changes_html}
-<footer class="footer"><span>Last successful sync: {escape(sync_display)}</span><a href="{escape(source_url)}" target="_blank" rel="noreferrer">Open Shahaf ↗</a></footer>
+<footer class="footer"><span>Last successful sync: <span id="last-sync">{escape(sync_display)}</span></span><a id="footer-source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer">Open Shahaf ↗</a></footer>
 </main><script>
-const schedule = {schedule_json};
+const profileData = {profile_json};
 const periods = {periods_json};
-const scheduleAvailable = {schedule_available};
 const scheduleZone = "Asia/Jerusalem";
 const dateFormatter = new Intl.DateTimeFormat("en-US", {{ weekday: "long", month: "long", day: "numeric", timeZone: scheduleZone }});
 const shortDateFormatter = new Intl.DateTimeFormat("en-US", {{ weekday: "short", month: "short", day: "numeric", timeZone: scheduleZone }});
 const palette = ["#d16d8e", "#78c8cb", "#f0bd47", "#76c983", "#8796df", "#d88a54"];
+let activeProfile = profileData[0] || {{ schedule: [], changes: [], exams: [], schedule_available: false, exams_available: false }};
+let schedule = activeProfile.schedule || [];
+let scheduleAvailable = Boolean(activeProfile.schedule_available);
+let changes = activeProfile.changes || [];
+let exams = activeProfile.exams || [];
 function nowInSchoolZone() {{ const parts = new Intl.DateTimeFormat("en-CA", {{ timeZone: scheduleZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }}).formatToParts(new Date()); const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value])); return {{ date: `${{values.year}}-${{values.month}}-${{values.day}}`, minutes: Number(values.hour) * 60 + Number(values.minute) }}; }}
 function minutes(value) {{ const [hour, minute] = value.split(":").map(Number); return hour * 60 + minute; }}
 function formatTime(value) {{ const [hour, minute] = value.split(":").map(Number); return `${{hour % 12 || 12}}:${{String(minute).padStart(2, "0")}} ${{hour >= 12 ? "PM" : "AM"}}`; }}
@@ -308,17 +349,19 @@ function schoolDate(value) {{ return new Date(`${{value}}T12:00:00Z`); }}
 function scheduleDates() {{ return [...new Set(schedule.map((item) => item.date))].sort(); }}
 function renderDayPicker(selected) {{ const picker = document.getElementById("day-picker"); const dates = scheduleDates(); if (!dates.length) {{ picker.innerHTML = `<div class="empty-day">No school days are available yet.</div>`; return; }} picker.innerHTML = dates.map((date) => `<button class="day-chip ${{date === selected ? "is-selected" : ""}}" type="button" role="option" aria-selected="${{date === selected}}" data-date="${{escapeHtml(date)}}">${{escapeHtml(shortDateFormatter.format(schoolDate(date)))}}</button>`).join(""); picker.querySelectorAll(".day-chip").forEach((button) => button.addEventListener("click", () => renderFullDay(button.dataset.date))); }}
 function renderFullDay(targetDate) {{ const dates = scheduleDates(); if (!dates.length) {{ document.getElementById("schedule-periods").innerHTML = `<div class="empty-day">The full schedule will appear after a successful sync.</div>`; return; }} const selected = dates.includes(targetDate) ? targetDate : dates[0]; renderDayPicker(selected); const items = schedule.filter((item) => item.date === selected); const byPeriod = Object.fromEntries(items.map((item) => [item.period, item])); const day = schoolDate(selected); document.getElementById("selected-day-title").textContent = dateFormatter.format(day); document.getElementById("selected-day-summary").textContent = `${{items.length}} lesson${{items.length === 1 ? "" : "s"}} · gaps included`; document.getElementById("schedule-periods").innerHTML = periods.map((slot) => {{ const item = byPeriod[slot.period]; const accent = palette[slot.period % palette.length]; return `<article class="period-row ${{item ? "has-lesson" : "is-gap"}}" style="--slot-accent:${{accent}}"><div class="period-main">${{item ? `<strong>${{escapeHtml(item.subject)}}</strong><span>${{escapeHtml([item.teacher, item.room ? `Room ${{item.room}}` : ""].filter(Boolean).join(" · ") || "Lesson")}}</span>` : `<span class="gap-label">Free period</span><span class="gap-sub">Nothing scheduled</span>`}}</div><div class="period-info"><strong>${{slot.period}}</strong><span>${{formatTime(slot.start)}}<br>– ${{formatTime(slot.end)}}</span></div></article>`; }}).join(""); }}
+function changeIsPast(change) {{ const now = nowInSchoolZone(); if (change.date < now.date) return true; if (change.date > now.date) return false; const slot = periods.find((item) => item.period === Number(change.period)); return slot ? now.minutes >= minutes(slot.end) : false; }}
+function renderChanges() {{ const list = document.getElementById("change-list"); const count = document.getElementById("changes-count"); const visible = changes.filter((item) => !changeIsPast(item)); count.textContent = String(visible.length); if (!visible.length) {{ list.innerHTML = `<div class="quiet">No upcoming cancellations or updates.</div>`; return; }} list.innerHTML = visible.map((item) => {{ const label = item.kind === "cancelled" ? "Cancelled" : item.kind === "added" ? "Added" : "Changed"; const subject = item.subject || "Schedule update"; return `<article class="change-row ${{escapeHtml(item.kind)}}"><div class="change-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Period ${{escapeHtml(item.period)}}</span></div><div class="change-body"><div><span class="change-label">${{label}}</span><h3>${{escapeHtml(subject)}}</h3></div><p>${{escapeHtml(item.detail || "Schedule update")}}</p></div></article>`; }}).join(""); }}
+function renderExams() {{ const list = document.getElementById("exam-list"); const count = document.getElementById("exams-count"); count.textContent = String(exams.length); if (!exams.length) {{ list.innerHTML = `<div class="quiet">No upcoming exams found for this profile.</div>`; return; }} list.innerHTML = exams.map((item) => {{ let periodText = String(item.start_period); if (item.end_period !== item.start_period) periodText += `–${{item.end_period}}`; return `<article class="exam-row"><div class="exam-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Periods ${{escapeHtml(periodText)}}</span></div><div class="exam-body"><h3>${{escapeHtml(item.subject)}}</h3><p>Reminder: 4 days before · 7:00 PM</p></div></article>`; }}).join(""); }}
 function setView(view) {{ const full = view === "full"; const examsView = view === "exams"; document.getElementById("now-view").hidden = full || examsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("changes-view").hidden = full || examsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} window.scrollTo({{top: 0, behavior: "smooth"}}); }}
 document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => renderFullDay(nowInSchoolZone().date));
 const PROFILE_STORAGE_KEY = "shahaf.profile.v1";
-const MASTER_PROFILE = {{ id: "master", name: "Master profile — Me" }};
-function loadProfiles() {{ try {{ const stored = JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY) || "[]"); return [MASTER_PROFILE, ...stored.filter((item) => item && item.id !== "master" && item.name).slice(0, 7)]; }} catch (_) {{ return [MASTER_PROFILE]; }} }}
-let profiles = loadProfiles();
 let activeProfileId = (() => {{ try {{ return localStorage.getItem(PROFILE_STORAGE_KEY + ".active") || "master"; }} catch (_) {{ return "master"; }} }})();
-function saveProfiles() {{ try {{ localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profiles.filter((item) => item.id !== "master"))); localStorage.setItem(PROFILE_STORAGE_KEY + ".active", activeProfileId); }} catch (_) {{}} }}
-function renderProfiles() {{ const select = document.getElementById("profile-select"); select.innerHTML = profiles.map((profile) => `<option value="${{escapeHtml(profile.id)}}">${{escapeHtml(profile.name)}}</option>`).join(""); if (!profiles.some((profile) => profile.id === activeProfileId)) activeProfileId = "master"; select.value = activeProfileId; document.getElementById("profile-status").textContent = `Using ${{profiles.find((profile) => profile.id === activeProfileId).name}}`; }}
+function saveProfiles() {{ try {{ localStorage.setItem(PROFILE_STORAGE_KEY + ".active", activeProfileId); }} catch (_) {{}} }}
+function renderProfiles() {{ const select = document.getElementById("profile-select"); select.innerHTML = profileData.map((profile) => `<option value="${{escapeHtml(profile.id)}}">${{escapeHtml(profile.label || profile.id)}}</option>`).join(""); if (!profileData.some((profile) => profile.id === activeProfileId)) activeProfileId = profileData[0]?.id || "master"; select.value = activeProfileId; document.getElementById("profile-status").textContent = `Using ${{activeProfile.label || activeProfile.id}}`; }}
+function renderProfileStatus() {{ const status = document.getElementById("sync-status"); if (status) {{ status.classList.toggle("stale", Boolean(activeProfile.stale)); status.querySelector("span:last-child").textContent = activeProfile.stale ? "Sync needs attention" : "Synced"; }} document.getElementById("profile-mark").textContent = activeProfile.mark || "XI"; document.getElementById("profile-label").textContent = activeProfile.label || "School schedule"; document.getElementById("last-sync").textContent = activeProfile.last_successful_sync || "Unknown"; [document.getElementById("source-link"), document.getElementById("footer-source-link")].forEach((link) => {{ if (link && activeProfile.source_url) link.href = activeProfile.source_url; }}); }}
+function applyProfile(profileId) {{ const next = profileData.find((profile) => profile.id === profileId) || profileData[0]; if (!next) return; activeProfile = next; activeProfileId = next.id; schedule = next.schedule || []; scheduleAvailable = Boolean(next.schedule_available); changes = next.changes || []; exams = next.exams || []; saveProfiles(); renderProfileStatus(); renderProfiles(); renderChanges(); renderExams(); refreshLiveLessons(); if (!document.getElementById("full-view").hidden) renderFullDay(scheduleDates().includes(nowInSchoolZone().date) ? nowInSchoolZone().date : scheduleDates()[0]); }}
 setView = function(view) {{ const full = view === "full"; const examsView = view === "exams"; const settingsView = view === "settings"; document.getElementById("now-view").hidden = full || examsView || settingsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("settings-view").hidden = !settingsView; document.getElementById("changes-view").hidden = full || examsView || settingsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} if (settingsView) renderProfiles(); window.scrollTo({{top: 0, behavior: "smooth"}}); }};
-document.getElementById("settings-back").addEventListener("click", () => setView("now")); document.getElementById("profile-select").addEventListener("change", (event) => {{ activeProfileId = event.target.value; saveProfiles(); renderProfiles(); }}); document.getElementById("profile-form").addEventListener("submit", (event) => {{ event.preventDefault(); const input = document.getElementById("profile-name"); const name = input.value.trim(); if (!name) return; profiles = [...profiles, {{ id: `profile-${{Date.now()}}`, name }}]; activeProfileId = profiles[profiles.length - 1].id; input.value = ""; saveProfiles(); renderProfiles(); }});
+document.getElementById("settings-back").addEventListener("click", () => setView("now")); document.getElementById("profile-select").addEventListener("change", (event) => applyProfile(event.target.value));
 let swipeStart = null;
 const swipeSurface = document.querySelector(".app");
 swipeSurface.addEventListener("touchstart", (event) => {{
@@ -338,7 +381,7 @@ swipeSurface.addEventListener("touchend", (event) => {{
   const nextIndex = views.indexOf(currentView) + (dx < 0 ? 1 : -1);
   if (nextIndex >= 0 && nextIndex < views.length) setView(views[nextIndex]);
 }}, {{ passive: true }});
-refreshLiveLessons(); document.body.classList.add("app-ready"); setInterval(refreshLiveLessons, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+applyProfile(activeProfileId); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 </script></body></html>
 '''
     (output_dir / "index.html").write_text(html, encoding="utf-8")

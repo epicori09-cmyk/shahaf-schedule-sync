@@ -71,6 +71,15 @@ class ShahafParserTests(unittest.TestCase):
         self.assertEqual(first.teacher, "בר סבן")
         self.assertEqual(snapshot.covered_dates, {date(2026, 9, 6), date(2026, 9, 7)})
 
+    def test_parses_roomless_teacher_for_track_filtering(self) -> None:
+        html = HTML.replace(
+            '<div class="TTLesson"><b>מתמטיקה 5 יח״ל מואץ</b><br/>אפי כהן</div>',
+            '<div class="TTLesson"><b>מדעי המחשב 2</b><br/>מן שמרת</div>',
+        )
+        snapshot = parse_timetable_html(html, reference_date=date(2026, 9, 1))
+        self.assertEqual(snapshot.lessons[-1].subject, "מדעי המחשב 2")
+        self.assertEqual(snapshot.lessons[-1].teacher, "מן שמרת")
+
     def test_rejects_missing_or_empty_grid(self) -> None:
         with self.assertRaises(ShahafSourceError):
             parse_timetable_html("<html><body>אין נתונים</body></html>", date(2026, 9, 1))

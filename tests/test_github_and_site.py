@@ -170,6 +170,47 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual(data["exams"][0]["reminder_date"], "2026-09-02")
             self.assertTrue(data["exams_available"])
 
+    def test_site_embeds_confirmed_additional_profile_data(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-02T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[],
+                exams=[],
+                profiles=[
+                    {
+                        "id": "ya1-physics-cs10",
+                        "label": "יא-1 · Physics + Computer Science 10-point",
+                        "mark": "XI·1",
+                        "schedule": [
+                            {
+                                "date": "2026-09-03",
+                                "period": 0,
+                                "subject": "פיסיקה 1",
+                                "teacher": "שגיא גיא",
+                                "room": "308 מע׳ פיסיקה",
+                                "start": "07:45",
+                                "end": "08:25",
+                            }
+                        ],
+                        "schedule_available": True,
+                        "changes": [],
+                        "exams": [],
+                        "exams_available": True,
+                    }
+                ],
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertIn("ya1-physics-cs10", html)
+            self.assertEqual(data["profiles"][1]["mark"], "XI·1")
+            self.assertEqual(data["profiles"][1]["schedule"][0]["teacher"], "שגיא גיא")
+
 
 if __name__ == "__main__":
     unittest.main()

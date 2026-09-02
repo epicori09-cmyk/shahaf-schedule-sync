@@ -27,6 +27,15 @@ The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf
 
 The site has three swipeable views: **Now** shows the current and next lesson, **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps, and **Exams** shows the selected subjects with a calendar alert four days before at 19:00. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
 
+The hidden Settings view also contains the synced profile selector. The Master
+profile is your יא-2 Gist-backed calendar. The additional יא-1 profile is
+generated from the public class timetable using the confirmed track selectors:
+Physics with גיא שגיא in room 308, Computer Science 2, and its Sunday
+alternative-assessment lessons with רועי ויסברט. The public timetable exposes
+parallel groups, so the selector deliberately does not import other Physics,
+Computer Science, Math, or English groups. The selected profile is remembered
+locally on the device; no passcode is stored in this public repository.
+
 ## Screenshot timetable migration
 
 The recurring timetable in the Gist was rebuilt from the supplied Shahaf

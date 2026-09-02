@@ -231,7 +231,10 @@ def _lesson_from_fragment(fragment: str) -> tuple[str, str, str] | None:
     rest_text = " ".join(rest_lines)
     room_match = re.search(r"\(([^()]*)\)", rest_text)
     room = room_match.group(1).strip() if room_match else ""
-    teacher = rest_lines[-1] if len(rest_lines) > 1 else ""
+    # Some Shahaf rows have only a teacher after the subject (no room in
+    # parentheses).  Treat that single remaining line as the teacher too;
+    # otherwise track-specific filters cannot distinguish parallel groups.
+    teacher = rest_lines[-1] if rest_lines else ""
     return subject, teacher, room
 
 

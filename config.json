@@ -7,5 +7,38 @@
   "gist_filename": "school.ics",
   "lookahead_days": 21,
   "site_title": "Shahaf Schedule Changes — Ostrovsky Grade 11-2",
-  "site_dir": "site"
+  "site_dir": "site",
+  "additional_profiles": [
+    {
+      "id": "ya1-physics-cs10",
+      "label": "יא-1 · Physics + Computer Science 10-point",
+      "mark": "XI·1",
+      "class_id": "61",
+      "class_number": 1,
+      "shared_subjects": [
+        "חינוך",
+        "חינוך גופני",
+        "היסטוריה",
+        "ספרות",
+        "עברית",
+        "תנ״ך"
+      ],
+      "selectors": [
+        {
+          "subject": "פיסיקה 1",
+          "teacher": "שגיא גיא",
+          "room": "308 מע׳ פיסיקה"
+        },
+        {
+          "subject": "מדעי המחשב 2"
+        },
+        {
+          "subject": "הערכה חלופית - מדעי המחשב2",
+          "teacher": "ויסברט רועי",
+          "room": "152 מעבדת מחשבים"
+        }
+      ],
+      "exam_terms": ["פיסיקה", "מדעי המחשב 2"]
+    }
+  ]
 }

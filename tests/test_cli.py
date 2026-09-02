@@ -18,6 +18,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(config.class_id, "11")
         self.assertEqual(config.gist_id, "a5891b76daf585d0953bc96958819fdf")
         self.assertEqual(config.gist_filename, "school.ics")
+        self.assertEqual(len(config.additional_profiles), 1)
+        self.assertEqual(config.additional_profiles[0]["class_id"], "61")
 
 
 if __name__ == "__main__":

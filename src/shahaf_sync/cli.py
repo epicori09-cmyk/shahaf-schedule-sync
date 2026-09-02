@@ -13,9 +13,10 @@ from zoneinfo import ZoneInfo
 from .github import GistClient, GitHubError
 from .exams import reconcile_exam_events
 from .ics import CalendarFormatError, parse_calendar
-from .model import SourceSnapshot
+from .model import Lesson, SourceSnapshot
+from .profiles import apply_changes, lesson_to_dict, select_changes, select_exams, select_lessons
 from .reconcile import ChangeRecord, reconcile_calendar
-from .shahaf import ShahafSourceError, parse_changes_html, parse_exams_html
+from .shahaf import ShahafSourceError, parse_changes_html, parse_exams_html, parse_timetable_html
 from .site import build_schedule, render_site
 
 
@@ -34,6 +35,7 @@ class Config:
     site_title: str
     site_dir: str
     class_number: int = 2
+    additional_profiles: tuple[dict[str, object], ...] = ()
 
 
 def load_config(path: Path) -> Config:
@@ -42,7 +44,14 @@ def load_config(path: Path) -> Config:
     missing = [key for key in required if key not in data]
     if missing:
         raise SyncFailure(f"Missing config keys: {', '.join(missing)}")
-    return Config(*(data[key] for key in required), int(data.get("class_number", 2)))
+    profiles = data.get("additional_profiles", [])
+    if not isinstance(profiles, list) or not all(isinstance(item, dict) for item in profiles):
+        raise SyncFailure("additional_profiles must be a list of objects")
+    return Config(
+        *(data[key] for key in required),
+        int(data.get("class_number", 2)),
+        tuple(profiles),
+    )
 
 
 def fetch_text(url: str) -> str:
@@ -56,25 +65,36 @@ def fetch_text(url: str) -> str:
         raise SyncFailure(f"Could not read source: {exc}") from exc
 
 
-def fetch_source(config: Config, today: date) -> tuple[SourceSnapshot, list[str]]:
-    url = f"{config.source_base_url}?cls={config.class_id}&tab=changes"
+def fetch_source(
+    config: Config,
+    today: date,
+    class_id: str | None = None,
+) -> tuple[SourceSnapshot, list[str]]:
+    selected_class_id = class_id or config.class_id
+    url = f"{config.source_base_url}?cls={selected_class_id}&tab=changes"
     try:
         html = fetch_text(url)
-        return parse_changes_html(html, today, url, expected_class_id=config.class_id), [url]
+        return parse_changes_html(html, today, url, expected_class_id=selected_class_id), [url]
     except (ShahafSourceError, SyncFailure) as exc:
         raise SyncFailure(f"Shahaf changes feed is not trustworthy: {exc}") from exc
 
 
-def fetch_exams(config: Config, today: date):
-    url = f"{config.source_base_url}?cls={config.class_id}&tab=exams"
+def fetch_exams(
+    config: Config,
+    today: date,
+    class_id: str | None = None,
+    class_number: int | None = None,
+):
+    selected_class_id = class_id or config.class_id
+    url = f"{config.source_base_url}?cls={selected_class_id}&tab=exams"
     try:
         html = fetch_text(url)
         return parse_exams_html(
             html,
             today,
             url,
-            expected_class_number=config.class_number,
-            expected_class_id=config.class_id,
+            expected_class_number=class_number if class_number is not None else config.class_number,
+            expected_class_id=selected_class_id,
         )
     except (ShahafSourceError, SyncFailure) as exc:
         raise SyncFailure(f"Shahaf exams feed is not trustworthy: {exc}") from exc
@@ -88,12 +108,136 @@ def _site_path(config: Config, root: Path) -> Path:
     return root / config.site_dir
 
 
-def _previous_site_state(site_path: Path) -> dict[str, str]:
+def _previous_site_state(site_path: Path) -> dict[str, object]:
     try:
         data = json.loads((site_path / "data.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _previous_profile(previous: dict[str, object], profile_id: str) -> dict[str, object] | None:
+    profiles = previous.get("profiles", [])
+    if not isinstance(profiles, list):
+        return None
+    return next(
+        (item for item in profiles if isinstance(item, dict) and item.get("id") == profile_id),
+        None,
+    )
+
+
+def _profile_failure(
+    spec: dict[str, object],
+    previous: dict[str, object],
+    current: datetime,
+    error: str,
+) -> dict[str, object]:
+    previous_data = _previous_profile(previous, str(spec.get("id", "")))
+    if previous_data is not None:
+        result = dict(previous_data)
+        result["stale"] = True
+        result["error"] = error
+        return result
+    return {
+        "id": str(spec.get("id", "profile")),
+        "label": str(spec.get("label", "Additional profile")),
+        "mark": str(spec.get("mark", "XI")),
+        "class_id": str(spec.get("class_id", "")),
+        "schedule": [],
+        "schedule_available": False,
+        "changes": [],
+        "exams": [],
+        "exams_available": False,
+        "source_updated": "",
+        "last_successful_sync": "",
+        "stale": True,
+        "error": error,
+        "generated_at": current.isoformat(),
+    }
+
+
+def _build_public_profile(
+    config: Config,
+    spec: dict[str, object],
+    current: datetime,
+) -> dict[str, object]:
+    profile_id = str(spec.get("id", "profile"))
+    class_id = str(spec.get("class_id", ""))
+    class_number = int(spec.get("class_number", 0))
+    if not class_id:
+        raise SyncFailure(f"Profile {profile_id} has no class_id")
+    window_start = current.date()
+    window_end = window_start + timedelta(days=config.lookahead_days)
+
+    lessons: list[Lesson] = []
+    update_text = ""
+    for week in range(4):
+        suffix = f"&week={week}" if week else ""
+        url = f"{config.source_base_url}?cls={class_id}&tab=changestable{suffix}"
+        snapshot = parse_timetable_html(fetch_text(url), current.date(), url)
+        update_text = snapshot.update_text or update_text
+        lessons.extend(
+            item
+            for item in snapshot.lessons
+            if window_start <= item.date <= window_end
+        )
+    unique_lessons = {
+        (
+            item.date,
+            item.period,
+            item.subject,
+            item.teacher,
+            item.room,
+        ): item
+        for item in lessons
+    }
+    selected_lessons = select_lessons(list(unique_lessons.values()), spec)
+    if not selected_lessons:
+        raise SyncFailure(f"Profile {profile_id} has no selected lessons in the published window")
+
+    changes_snapshot, _ = fetch_source(config, current.date(), class_id=class_id)
+    selected_changes = [
+        item
+        for item in select_changes(changes_snapshot.changes, spec)
+        if window_start <= item.date <= window_end
+    ]
+    selected_lessons = apply_changes(selected_lessons, selected_changes)
+
+    exams_snapshot = fetch_exams(
+        config,
+        current.date(),
+        class_id=class_id,
+        class_number=class_number,
+    )
+    exams = select_exams(exams_snapshot.exams, spec)
+    change_records = [
+        ChangeRecord(
+            item.kind,
+            item.date,
+            item.period,
+            item.subject or item.teacher or "Schedule update",
+            item.detail or "Published Shahaf update",
+        )
+        for item in selected_changes
+    ]
+    source_url = f"{config.source_base_url}?cls={class_id}&tab=changes"
+    return {
+        "id": profile_id,
+        "label": str(spec.get("label", profile_id)),
+        "mark": str(spec.get("mark", "XI")),
+        "class_id": class_id,
+        "schedule": [lesson_to_dict(item) for item in selected_lessons],
+        "schedule_available": True,
+        "changes": change_records,
+        "exams": exams,
+        "exams_available": True,
+        "source_url": source_url,
+        "source_updated": update_text or changes_snapshot.update_text,
+        "last_successful_sync": current.isoformat(),
+        "stale": False,
+        "error": "",
+        "generated_at": current.isoformat(),
+    }
 
 
 def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | None = None) -> list[ChangeRecord]:
@@ -122,6 +266,14 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             current.date().isoformat(),
             (current.date() + timedelta(days=config.lookahead_days)).isoformat(),
         )
+        profile_views: list[dict[str, object]] = []
+        for spec in config.additional_profiles:
+            try:
+                profile_views.append(_build_public_profile(config, spec, current))
+            except (ShahafSourceError, SyncFailure, ValueError, OSError) as profile_exc:
+                profile_views.append(
+                    _profile_failure(spec, previous, current, str(profile_exc))
+                )
         render_site(
             site_path,
             title=config.site_title,
@@ -134,6 +286,7 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             schedule=schedule,
             exams=exam_snapshot.exams,
             now=current,
+            profiles=profile_views,
         )
         print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes
