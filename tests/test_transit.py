@@ -61,11 +61,23 @@ class TransitWakeTests(unittest.TestCase):
             origin=ORIGIN,
             destination=DESTINATION,
         )
-        self.assertEqual(result["route_departure"], "07:20")
+        self.assertEqual(result["route_departure"], "07:15")
         self.assertEqual(result["route_arrival"], "08:25")
-        self.assertEqual(result["wake_time"], "06:05")
+        self.assertEqual(result["wake_time"], "06:00")
         self.assertEqual(result["shortcut_action"], "set")
         self.assertEqual(result["subject"], "ספרות")
+
+    def test_origin_walk_is_never_less_than_five_minutes(self) -> None:
+        result = build_ya1_transit_wake(
+            schedule(trip("bus", time(7, 20), time(8, 25))),
+            [{"date": DAY.isoformat(), "start": "08:30", "subject": "ספרות"}],
+            now=datetime(2026, 9, 5, 12, 0),
+            origin=ORIGIN,
+            destination=DESTINATION,
+        )
+        self.assertEqual(result["route_departure"], "07:15")
+        self.assertEqual(result["route"][0]["type"], "walk")
+        self.assertEqual(result["route"][0]["minutes"], 5)
 
     def test_requires_a_safe_route_and_leaves_alarm_when_none_exists(self) -> None:
         result = build_ya1_transit_wake(

@@ -239,6 +239,46 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual(wake["route_arrival"], "08:25")
             self.assertNotIn("wake", data)
 
+    def test_ya1_site_exposes_the_selected_bus_plan(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Ostrovsky Grade 11-1",
+                generated_at="2026-09-02T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[],
+                profile_id="ya1",
+                profile_label="Ostrovsky Grade 11-1",
+                profile_mark="XI·1",
+                profile_class_id="61",
+                publish_wake=False,
+                transit_wake={
+                    "profile": "ya1",
+                    "route_departure": "07:15",
+                    "route_arrival": "07:34",
+                    "route": [
+                        {"type": "walk", "minutes": 5, "from": "Home", "to": "Stop"},
+                        {
+                            "type": "transit",
+                            "route": "17",
+                            "from_stop": "Stop",
+                            "to_stop": "School stop",
+                            "departure": "07:18",
+                            "arrival": "07:30",
+                        },
+                    ],
+                    "shortcut_action": "set",
+                    "stale": False,
+                },
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            self.assertIn("transit-wake-card", html)
+            self.assertIn("Bus", html)
+            self.assertIn("Earlier buses were considered", html)
+
     def test_wake_data_uses_first_master_lesson_minus_75_minutes(self) -> None:
         wake = build_wake_data(
             [
