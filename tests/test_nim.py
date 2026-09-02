@@ -29,6 +29,8 @@ class NimTests(unittest.TestCase):
         self.assertEqual(seen[0].get_header("Authorization"), "Bearer nvapi-test")
         body = json.loads(seen[0].data.decode())
         self.assertEqual(body["temperature"], 0)
+        self.assertEqual(body["reasoning_effort"], "high")
+        self.assertEqual(body["max_tokens"], 1024)
         self.assertIn("untrusted schedule data", body["messages"][0]["content"])
 
     def test_medium_risk_is_not_an_allow_decision(self) -> None:

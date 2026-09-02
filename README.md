@@ -27,7 +27,8 @@ feed is a successful no-op; an unknown non-empty schema is a safe failure.
 The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
 
 For alarm safety, the workflow sends only structured Master יא-2 schedule facts to
-NVIDIA's OpenAI-compatible NIM endpoint. NIM never receives the Gist token and
+NVIDIA's OpenAI-compatible NIM endpoint using `openai/gpt-oss-20b` with high
+reasoning effort. NIM never receives the Gist token and
 cannot edit the Gist or the iPhone. It may approve a destructive alarm
 replacement/clear only with a valid low-risk JSON answer. Missing credentials,
 an API outage, malformed output, an exam/other possible obligation, or any
