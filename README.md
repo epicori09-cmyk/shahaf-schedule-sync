@@ -21,9 +21,21 @@ feed is a successful no-op; an unknown non-empty schema is a safe failure.
 1. Create a GitHub repository and copy this directory into it.
 2. Add a fine-grained personal access token as repository secret `GIST_TOKEN`. Give it only **Gists: write** permission.
 3. Enable GitHub Pages with **GitHub Actions** as the source.
-4. Run **Shahaf schedule sync → Run workflow** once. The workflow then runs at 06:30 and 07:30 Israel time.
+4. Add your NVIDIA API key as repository secret `NVIDIA_API_KEY`. From the repository folder, you can do this interactively with `gh secret set NVIDIA_API_KEY --repo epicori09-cmyk/shahaf-schedule-sync` and paste the key when prompted. Never put the key in a file or commit it. Optionally add a repository variable `NVIDIA_NIM_MODEL`; it defaults to `openai/gpt-oss-20b`.
+5. Run **Shahaf schedule sync → Run workflow** once. The workflow then runs at 04:30, 06:30, and 07:30 Israel time.
 
 The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
+
+For alarm safety, the workflow sends only structured Master יא-2 schedule facts to
+NVIDIA's OpenAI-compatible NIM endpoint. NIM never receives the Gist token and
+cannot edit the Gist or the iPhone. It may approve a destructive alarm
+replacement/clear only with a valid low-risk JSON answer. Missing credentials,
+an API outage, malformed output, an exam/other possible obligation, or any
+uncertainty produces `shortcut_action: leave`, preserving the existing alarm.
+
+If `NVIDIA_API_KEY` has not been added yet, ordinary future alarms still work;
+only a destructive clear or a same-day change is held safely at `leave` until
+the safety check can run.
 
 The site has three swipeable views: **Now** shows the current and next lesson, **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps, and **Exams** shows the selected subjects with a calendar alert four days before at 19:00. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
 

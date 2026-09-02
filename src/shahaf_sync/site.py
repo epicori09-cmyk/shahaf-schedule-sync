@@ -190,6 +190,8 @@ def build_wake_data(
     schedule_available: bool,
     stale: bool,
     now: datetime | None = None,
+    alarm_safety: str | None = None,
+    alarm_safety_reason: str = "",
 ) -> dict[str, Any]:
     """Build the safe, master-profile-only input for the iPhone Shortcut."""
 
@@ -206,6 +208,8 @@ def build_wake_data(
         # are substantially less error-prone in the Shortcuts editor than
         # Boolean magic variables.
         "shortcut_action": "leave",
+        "alarm_safety": alarm_safety or "not-reviewed",
+        "alarm_safety_reason": alarm_safety_reason,
         "timezone": "Asia/Jerusalem",
     }
     if stale:
@@ -245,13 +249,21 @@ def build_wake_data(
                 "subject": str(first.get("subject", "")),
                 "enabled": True,
                 "alarm_for_today": school_day == today,
-                "shortcut_action": "set" if school_day == today else "clear",
+                # The Shortcut runs before school and may need to create an
+                # alarm for tomorrow (for example on a no-school day today).
+                "shortcut_action": "set",
             }
         )
+        if alarm_safety not in (None, "approved", "not-required"):
+            # The AI is a deletion/replacement gate. Any missing, failed, or
+            # ambiguous review preserves the current labeled alarm.
+            base["shortcut_action"] = "leave"
         return base
 
     base["fallback_status"] = "no-lessons"
     base["shortcut_action"] = "clear"
+    if alarm_safety not in (None, "approved", "not-required"):
+        base["shortcut_action"] = "leave"
     return base
 
 
@@ -270,6 +282,8 @@ def render_site(
     exams: list[Exam] | None = None,
     now: datetime | None = None,
     profiles: list[dict[str, Any]] | None = None,
+    alarm_safety: str | None = None,
+    alarm_safety_reason: str = "",
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     schedule_data = schedule or []
@@ -335,6 +349,8 @@ def render_site(
         schedule_available=schedule is not None,
         stale=stale,
         now=now,
+        alarm_safety=alarm_safety,
+        alarm_safety_reason=alarm_safety_reason,
     )
     data["wake"] = wake_data
     (output_dir / "data.json").write_text(

@@ -229,6 +229,29 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertEqual(wake["fallback_status"], "none")
         self.assertEqual(wake["shortcut_action"], "set")
 
+    def test_wake_data_sets_a_future_alarm_for_tomorrow(self) -> None:
+        wake = build_wake_data(
+            [{"date": "2026-09-04", "period": 1, "start": "08:30", "subject": "Math"}],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["next_school_day"], "2026-09-04")
+        self.assertFalse(wake["alarm_for_today"])
+        self.assertEqual(wake["shortcut_action"], "set")
+
+    def test_blocked_alarm_safety_preserves_existing_alarm(self) -> None:
+        wake = build_wake_data(
+            [],
+            schedule_available=True,
+            stale=False,
+            alarm_safety="blocked",
+            alarm_safety_reason="NIM unavailable",
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["shortcut_action"], "leave")
+        self.assertEqual(wake["alarm_safety"], "blocked")
+
     def test_wake_data_skips_a_passed_wake_time_and_handles_no_school(self) -> None:
         wake = build_wake_data(
             [
@@ -242,7 +265,7 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertEqual(wake["next_school_day"], "2026-09-06")
         self.assertFalse(wake["alarm_for_today"])
         self.assertTrue(wake["enabled"])
-        self.assertEqual(wake["shortcut_action"], "clear")
+        self.assertEqual(wake["shortcut_action"], "set")
 
         no_school = build_wake_data(
             [],

@@ -50,7 +50,13 @@ Boolean pickers:
 - `leave`: Shahaf data is stale or unavailable. Stop before touching alarms.
 - `clear`: no school today, or the wake time has already passed. Delete only
   the labeled school alarm, then stop.
-- `set`: a valid school-day wake alarm should be created.
+- `set`: a valid future school-day wake alarm (today or the next school day)
+  should be created.
+
+The schedule workflow uses NVIDIA NIM as an additional conservative gate for
+destructive cases. If NIM is unavailable or sees a possible exam/other
+obligation, the endpoint returns `leave`, so the Shortcut leaves the current
+alarm alone. NIM never has access to the Gist token.
 
 ## Add the automatic triggers
 

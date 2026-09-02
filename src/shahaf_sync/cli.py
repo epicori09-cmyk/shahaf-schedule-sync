@@ -14,10 +14,11 @@ from .github import GistClient, GitHubError
 from .exams import reconcile_exam_events
 from .ics import CalendarFormatError, parse_calendar
 from .model import Lesson, SourceSnapshot
+from .nim import NimError, NimSafetyClient, context_for_alarm_review
 from .profiles import apply_changes, lesson_to_dict, select_changes, select_exams, select_lessons
 from .reconcile import ChangeRecord, reconcile_calendar
 from .shahaf import ShahafSourceError, parse_changes_html, parse_exams_html, parse_timetable_html
-from .site import build_schedule, render_site
+from .site import build_schedule, build_wake_data, render_site
 
 
 class SyncFailure(RuntimeError):
@@ -156,6 +157,83 @@ def _profile_failure(
     }
 
 
+def _dict_change(change: ChangeRecord) -> dict[str, object]:
+    return {
+        "kind": change.kind,
+        "date": change.date.isoformat(),
+        "period": change.period,
+        "subject": change.subject,
+        "detail": change.detail,
+    }
+
+
+def _dict_exam(exam: object) -> dict[str, object]:
+    if isinstance(exam, dict):
+        return {str(key): value for key, value in exam.items()}
+    return {
+        "date": exam.date.isoformat(),
+        "subject": exam.subject,
+        "start_period": exam.start_period,
+        "end_period": exam.end_period,
+        "detail": exam.detail,
+        "group": exam.group,
+    }
+
+
+def _alarm_safety(
+    *,
+    wake: dict[str, object],
+    changes: list[ChangeRecord],
+    schedule: list[dict[str, object]],
+    exams: list[object],
+    current: datetime,
+) -> tuple[str, str]:
+    """Return approved/not-required/blocked without ever failing the sync.
+
+    Normal future alarms need no model call. NIM is used for destructive
+    cases: clearing an alarm, or replacing today's alarm after a same-day
+    Shahaf change. Missing credentials and every model/API/schema failure are
+    deliberately treated as blocked, so the iPhone keeps its current alarm.
+    """
+    action = str(wake.get("shortcut_action", "leave"))
+    today = current.date().isoformat()
+    today_changes = [_dict_change(item) for item in changes if item.date.isoformat() == today]
+    needs_review = action == "clear" or (action == "set" and bool(today_changes))
+    if not needs_review:
+        return "not-required", "No destructive schedule change needs AI review."
+    api_key = os.environ.get("NVIDIA_API_KEY", "")
+    if not api_key:
+        return "blocked", "NVIDIA_API_KEY is not configured; preserving the current alarm."
+
+    today_lessons = [item for item in schedule if str(item.get("date", "")) == today]
+    today_exams = [_dict_exam(item) for item in exams if getattr(item, "date", None) and item.date.isoformat() == today]
+    candidate = {
+        "shortcut_action": action,
+        "alarm_for_today": bool(wake.get("alarm_for_today")),
+        "next_school_day": wake.get("next_school_day"),
+        "wake_at": wake.get("wake_at"),
+        "subject": wake.get("subject"),
+        "stale": bool(wake.get("stale")),
+    }
+    context = context_for_alarm_review(
+        candidate=candidate,
+        changes= today_changes,
+        today_lessons=today_lessons,
+        today_exams=today_exams,
+        now=current.isoformat(),
+    )
+    try:
+        decision = NimSafetyClient(
+            api_key,
+            model=os.environ.get("NVIDIA_NIM_MODEL") or "openai/gpt-oss-20b",
+        ).classify(context)
+    except NimError as exc:
+        return "blocked", str(exc)
+    if not decision.safe_to_delete_alarm or decision.risk_level != "low":
+        return "blocked", f"NIM preserved the alarm: {decision.reason}"
+    return "approved", f"NIM approved the alarm change: {decision.reason}"
+
+
 def _build_public_profile(
     config: Config,
     spec: dict[str, object],
@@ -266,6 +344,19 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             current.date().isoformat(),
             (current.date() + timedelta(days=config.lookahead_days)).isoformat(),
         )
+        candidate_wake = build_wake_data(
+            schedule,
+            schedule_available=True,
+            stale=False,
+            now=current,
+        )
+        alarm_safety, alarm_safety_reason = _alarm_safety(
+            wake=candidate_wake,
+            changes=changes,
+            schedule=schedule,
+            exams=exam_snapshot.exams,
+            current=current,
+        )
         profile_views: list[dict[str, object]] = []
         for spec in config.additional_profiles:
             try:
@@ -287,6 +378,8 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             exams=exam_snapshot.exams,
             now=current,
             profiles=profile_views,
+            alarm_safety=alarm_safety,
+            alarm_safety_reason=alarm_safety_reason,
         )
         print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes
