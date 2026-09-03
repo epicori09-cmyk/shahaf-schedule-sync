@@ -45,6 +45,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
       - name: Fetch private managed profiles
+        id: profiles
         env:
           PROFILE_SYNC_URL: ${{ secrets.PROFILE_SYNC_URL }}
           PROFILE_SYNC_TOKEN: ${{ secrets.PROFILE_SYNC_TOKEN }}
@@ -52,6 +53,7 @@ jobs:
 
       - name: Run Shahaf sync
         id: sync
+        if: steps.profiles.outcome == 'success'
         continue-on-error: true
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
@@ -60,7 +62,7 @@ jobs:
         run: PYTHONPATH=src python -m shahaf_sync --config config.json --profiles-file "$RUNNER_TEMP/managed-profiles.json"
 
       - name: Update Alexa wake-up reminder
-        if: steps.sync.outcome == 'success'
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success'
         continue-on-error: true
         env:
           ALEXA_API_ENDPOINT: ${{ secrets.ALEXA_API_ENDPOINT }}
@@ -69,16 +71,16 @@ jobs:
         run: PYTHONPATH=src python scripts/update_alexa_reminder.py
 
       - name: Upload Pages artifact
-        if: always()
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
       - name: Deploy Pages site
         id: deployment
-        if: always()
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success'
         uses: actions/deploy-pages@v4
 
-      - name: Fail workflow when sync failed
-        if: steps.sync.outcome == 'failure'
+      - name: Fail workflow when profile fetch or sync failed
+        if: always() && (steps.profiles.outcome == 'failure' || steps.sync.outcome == 'failure')
         run: exit 1
