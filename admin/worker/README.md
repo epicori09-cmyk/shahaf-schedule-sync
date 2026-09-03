@@ -36,7 +36,10 @@ The existing `GIST_TOKEN`, `NVIDIA_API_KEY`, and Alexa secrets are unchanged.
 ## Import flow
 
 Open the Worker URL, log in, paste the strict GPT JSON or load a `.json`
-file, enter the admin-only student name, and choose **Validate and publish**.
+file, enter the admin-only student name, enter the student's Shahaf class
+number, and choose **Validate and publish**. The class-number field is required
+for every import and overrides the value inside the GPT package, so the
+student's changes and exams are fetched for the class number you confirmed.
 The Worker rejects unknown rows, duplicate periods, invalid times, missing
 class identity, and incomplete represented weekdays. A valid import is
 idempotent for the same admin name, reactivates a disabled profile, and
@@ -48,9 +51,11 @@ The console displays:
 
 `https://<pages>/students/<random-id>/wake.json`
 
-and the alarm label `Shahaf Wake - <first-six-id-characters>`. Configure the
-reviewed Shortcut template with those values; the `.shortcut` file is not
-generated server-side.
+and the alarm label `Shahaf Wake - <first-six-id-characters>`. The import
+result also labels the wake URL as the **Shortcut URL**; paste that exact URL
+into the student's `Get Contents of URL` action. Each profile therefore gets
+its own Shortcut endpoint and alarm label. Configure the reviewed Shortcut
+template with those values; the `.shortcut` file is not generated server-side.
 
 The GitHub workflow remains the only publisher. A failed Worker dispatch or
 failed sync does not replace the last published student page. The workflow
