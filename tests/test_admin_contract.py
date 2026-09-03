@@ -10,7 +10,7 @@ ROOT = Path(__file__).parents[1]
 class AdminContractTests(unittest.TestCase):
     def test_worker_has_private_routes_and_security_controls(self) -> None:
         source = (ROOT / "admin" / "worker" / "src" / "index.js").read_text(encoding="utf-8")
-        for route in ("/api/login", "/api/logout", "/api/profiles", "/api/profiles/import", "/internal/profiles", "const publish ="):
+        for route in ("/api/login", "/api/logout", "/api/session", "/api/profiles", "/api/profiles/import", "/internal/profiles", "const publish ="):
             self.assertIn(route, source)
         for import_control in ("id=\"classNumber\"", "body.class_number", "shortcut_url", "Shortcut URL (paste into Get Contents of URL)"):
             self.assertIn(import_control, source)
