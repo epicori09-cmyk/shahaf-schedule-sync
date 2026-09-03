@@ -1,6 +1,17 @@
 const WEEKDAYS = new Set(["sunday", "monday", "tuesday", "wednesday", "thursday"]);
 const MAX_AGE = 8 * 60 * 60;
 
+// This is a display-only fallback for the admin picker. The live list is read
+// from Shahaf first, so an import never requires the operator to know `cls`.
+const FALLBACK_SHAHAF_CLASSES = [
+  ["60", "י - 1"], ["53", "י - 2"], ["3", "י - 3"], ["4", "י - 4"], ["5", "י - 5"],
+  ["41", "י - 7"], ["30", "י - 8"], ["51", "י - 9"], ["55", "י - 11"], ["52", "י - 12"],
+  ["61", "יא - 1"], ["11", "יא - 2"], ["12", "יא - 3"], ["13", "יא - 4"], ["14", "יא - 5"],
+  ["15", "יא - 6"], ["16", "יא - 7"], ["17", "יא - 8"], ["18", "יא - 9"], ["45", "יא - 11"], ["62", "יא - 12"],
+  ["63", "יב - 1"], ["21", "יב - 2"], ["22", "יב - 3"], ["23", "יב - 4"], ["24", "יב - 5"],
+  ["25", "יב - 6"], ["26", "יב - 7"], ["27", "יב - 8"], ["28", "יב - 9"], ["50", "יב - 11"], ["64", "יב - 12"],
+].map(([id, label]) => ({ id, label }));
+
 const json = (value, status = 200, headers = {}) => new Response(JSON.stringify(value), {
   status,
   headers: { "content-type": "application/json; charset=utf-8", ...headers },
@@ -16,6 +27,38 @@ const same = (a, b) => {
   for (let i = 0; i < a.length; i += 1) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return result === 0;
 };
+
+function decodeHtml(value) {
+  return String(value || "")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, number) => String.fromCodePoint(Number(number)))
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ");
+}
+
+function parseShahafClassOptions(html) {
+  const select = String(html || "").match(/<select\b[^>]*\bname\s*=\s*["']cls["'][^>]*>[\s\S]*?<\/select>/i);
+  if (!select) return [];
+  const options = [];
+  for (const match of select[0].matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi)) {
+    const value = match[1].match(/\bvalue\s*=\s*["']([^"']+)["']/i)?.[1]?.trim() || "";
+    const label = decodeHtml(match[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+    if (/^[A-Za-z0-9_-]{1,40}$/.test(value) && label) options.push({ id: value, label });
+  }
+  return [...new Map(options.map((item) => [item.id, item])).values()];
+}
+
+async function shahafClassOptions(env) {
+  const source = env.SHAHAF_CLASS_LIST_URL || "https://ostrovsky.shahaf.site/?cls=11&tab=changes";
+  try {
+    const response = await fetch(source, { headers: { Accept: "text/html", "User-Agent": "shahaf-profile-admin" } });
+    if (!response.ok) throw new Error(`Shahaf class list returned HTTP ${response.status}`);
+    const options = parseShahafClassOptions(await response.text());
+    return { classes: options.length ? options : FALLBACK_SHAHAF_CLASSES, stale: !options.length, source };
+  } catch (error) {
+    return { classes: FALLBACK_SHAHAF_CLASSES, stale: true, source, error: String(error.message || error) };
+  }
+}
 
 async function verifyPassword(password, encoded) {
   const [algorithm, iterationsText, saltText, digestText] = String(encoded || "").split("$");
@@ -239,6 +282,15 @@ const dashboardEnhancements = `<script>
   var byId=function(id){return document.getElementById(id)};
   var toast=function(message,bad){var el=byId("toast");if(!el)return;el.textContent=message;el.className="toast"+(bad?" bad":"");clearTimeout(toast.timer);toast.timer=setTimeout(function(){el.className="toast hidden"},4200)};
   var setTransitFields=function(){var enabled=byId("editTransitEnabled")&&byId("editTransitEnabled").checked;["editOriginAddress","editOriginLat","editOriginLon"].forEach(function(id){var el=byId(id);if(el)el.disabled=!enabled})};
+  var classOptions=[];
+  var populateClassPicker=function(id,current){var select=byId(id);if(!select)return;var saved=String(current||select.value||"").trim();select.innerHTML="";var placeholder=document.createElement("option");placeholder.value="";placeholder.textContent=classOptions.length?"Choose the student’s class…":"Class list is loading…";select.appendChild(placeholder);classOptions.forEach(function(item){var option=document.createElement("option");option.value=item.id;option.textContent=item.label+"  (Shahaf ID "+item.id+")";select.appendChild(option)});if(saved&&!classOptions.some(function(item){return item.id===saved})){var savedOption=document.createElement("option");savedOption.value=saved;savedOption.textContent="Saved class (Shahaf ID "+saved+")";select.appendChild(savedOption)}select.value=saved};
+  var populateClassPickers=function(){populateClassPicker("classId");populateClassPicker("editClassId")};
+  var addClassPicker=function(beforeId,selectId,labelText){if(byId(selectId))return;var before=byId(beforeId);if(!before)return;var field=document.createElement("div");field.className="field class-picker-field";var label=document.createElement("label");label.setAttribute("for",selectId);label.textContent=labelText;var select=document.createElement("select");select.id=selectId;select.className="input";select.required=true;label.appendChild(select);var helper=document.createElement("span");helper.id=selectId+"Status";helper.className="helper";helper.textContent="Loading Shahaf’s class list…";var reload=document.createElement("button");reload.type="button";reload.className="button";reload.textContent="Reload class list";reload.onclick=function(){loadClassList()};field.appendChild(label);field.appendChild(helper);field.appendChild(reload);before.closest(".field").parentNode.insertBefore(field,before.closest(".field"));populateClassPicker(selectId)};
+  var ensureClassIdFields=function(){addClassPicker("classNumber","classNumber","classId","Shahaf class — choose the visible class label");addClassPicker("editClassNumber","editClassNumber","editClassId","Shahaf class — choose the visible class label")};
+  var loadClassList=async function(){try{var result=await callApi("/api/classes");classOptions=Array.isArray(result.classes)?result.classes:[];populateClassPickers();var suffix=result.stale?" (using the last safe list)":"";["classIdStatus","editClassIdStatus"].forEach(function(id){var el=byId(id);if(el)el.textContent="Choose by label; the internal ID is stored automatically"+suffix})}catch(error){["classIdStatus","editClassIdStatus"].forEach(function(id){var el=byId(id);if(el)el.textContent="Could not load the class list. Tap Reload class list."});toast("Class list unavailable",true)}};
+  ensureClassIdFields();
+  byId("file").addEventListener("change",function(){var file=byId("file").files[0];if(!file)return;var reader=new FileReader();reader.onload=function(){byId("payload").value=reader.result;try{var packageData=JSON.parse(reader.result);var classId=String(packageData.shahaf&&packageData.shahaf.class_id||"").trim();if(classId)byId("classId").value=classId}catch(_){}};reader.readAsText(file)});
+  byId("importBtn").onclick=async function(){var button=byId("importBtn");button.disabled=true;byId("result").textContent="Validating package and queuing publish…";try{if(!classOptions.length)await loadClassList();var classNumber=Number(byId("classNumber").value);if(!Number.isInteger(classNumber)||classNumber<1)throw new Error("Enter a valid Shahaf class number");var packageData=JSON.parse(byId("payload").value);var classId=String(byId("classId").value||"").trim();if(!classId)throw new Error("Choose the student’s class from the Shahaf class list.");var result=await callApi("/api/profiles/import",{method:"POST",body:JSON.stringify({name:byId("studentName").value.trim(),class_id:classId,class_number:classNumber,package:packageData})});byId("result").textContent="Publish queued\n\nPublic ID: "+result.public_id+"\nSchedule: "+result.page_url+"\nShortcut URL (paste into Get Contents of URL): "+result.shortcut_url+"\nAlarm label: "+result.alarm_label+(result.warnings&&result.warnings.length?"\n\nWarnings:\n"+result.warnings.join("\n"):"");toast("Profile saved and publish queued");byId("refreshBtn").click()}catch(error){byId("result").textContent=error.message;toast("Import was not published",true)}finally{button.disabled=false}};
   var blockWeekdays=["sunday","monday","tuesday","wednesday","thursday"];var blockLabels={sunday:"Sunday",monday:"Monday",tuesday:"Tuesday",wednesday:"Wednesday",thursday:"Thursday"};var blockPackage=null;var blockWeekday="sunday";
   var blockCss=function(){if(byId("block-editor-css"))return;var style=document.createElement("style");style.id="block-editor-css";style.textContent=".block-editor{margin:18px 0 4px;padding:16px;border:1px solid var(--line);border-radius:12px;background:#101714}.block-editor-head{display:flex;justify-content:space-between;align-items:start;gap:12px;margin-bottom:13px}.block-editor-head h3{margin:0;font-size:17px}.block-editor-head p{margin:4px 0 0;color:var(--muted);font-size:12px}.block-tabs{display:flex;gap:7px;overflow:auto;padding:2px 0 10px;scrollbar-width:none}.block-tabs::-webkit-scrollbar{display:none}.block-tab{flex:0 0 auto;padding:8px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--muted);font-weight:750}.block-tab.active{background:var(--lime);border-color:var(--lime);color:#15200f}.period-editor-list{display:grid;gap:9px}.period-editor-card{padding:12px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2)}.period-editor-card.is-gap{border-color:#53645c}.period-editor-card.is-unknown{border-color:var(--pink)}.period-editor-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px}.period-editor-top strong{font-size:15px}.period-editor-top span{color:var(--muted);font-size:11px}.period-editor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.period-editor-field{display:grid;gap:4px}.period-editor-field.wide{grid-column:1/-1}.period-editor-field label{color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}.period-editor-field input,.period-editor-field select{width:100%;min-height:38px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#0f1513;color:var(--ink);font:inherit}.period-editor-field input:disabled{opacity:.55}.block-note{margin:11px 0 0;color:var(--muted);font-size:11px}@media(max-width:520px){.period-editor-grid{grid-template-columns:1fr}.period-editor-field.wide{grid-column:auto}}";document.head.appendChild(style)};
   var blockField=function(label,value,type,disabled){var wrap=document.createElement("div");wrap.className="period-editor-field";var labelNode=document.createElement("label");labelNode.textContent=label;var input=document.createElement("input");input.type=type||"text";input.value=value||"";input.disabled=Boolean(disabled);wrap.appendChild(labelNode);wrap.appendChild(input);return {wrap:wrap,input:input}};
@@ -252,7 +304,9 @@ const dashboardEnhancements = `<script>
   window.deleteManagedProfile=async function(id){if(!confirm("Permanently delete this profile from D1 and remove its public page on the next successful deployment? This cannot be undone."))return;try{await callApi("/api/profiles/"+encodeURIComponent(id),{method:"DELETE",body:"{}"});byId("editPanel").classList.add("hidden");toast("Profile deleted; publish queued");byId("refreshBtn").click()}catch(error){toast(error.message,true)}};
   window.publishManagedProfile=async function(id){try{await callApi("/api/publish/"+encodeURIComponent(id),{method:"POST",body:"{}"});toast("Publish queued");byId("refreshBtn").click()}catch(error){toast(error.message,true)}};
   var enhance=function(){document.querySelectorAll("[data-view], [data-disable]").forEach(function(oldButton){var id=oldButton.getAttribute("data-view")||oldButton.getAttribute("data-disable");var isDisable=oldButton.hasAttribute("data-disable");var active=isDisable&&!oldButton.disabled;var button=document.createElement("button");button.className=oldButton.className;button.setAttribute("data-profile-id",id);button.textContent=isDisable?(active?"Disable":"Enable"):"Edit";if(isDisable&&active)button.classList.add("danger");button.onclick=function(){return isDisable?window.toggleManagedProfile(id,active):window.openManagedProfileEditor(id)};oldButton.replaceWith(button)});document.querySelectorAll(".profile-actions").forEach(function(actions){if(actions.dataset.extraActions)return;var edit=actions.querySelector("[data-profile-id]");if(!edit)return;var id=edit.getAttribute("data-profile-id");actions.dataset.extraActions="1";var publish=document.createElement("button");publish.className="button";publish.textContent="Publish now";publish.onclick=function(){window.publishManagedProfile(id)};var remove=document.createElement("button");remove.className="button danger";remove.textContent="Delete";remove.onclick=function(){window.deleteManagedProfile(id)};actions.appendChild(publish);actions.appendChild(remove)});};
-  var originalOpen=window.openManagedProfileEditor;window.openManagedProfileEditor=async function(id){await originalOpen(id);var payload=byId("editPayload");if(payload)window.loadBlockEditor(JSON.parse(payload.value))};var originalSave=window.saveManagedProfile;window.saveManagedProfile=async function(){window.syncBlockEditor();return originalSave()};
+  var originalLogin=byId("loginBtn").onclick;byId("loginBtn").onclick=async function(){await originalLogin();if(!byId("loginScreen").classList.contains("hidden"))return;await loadClassList()};
+  var classLoadTimer=setInterval(function(){if(!byId("dashboard").classList.contains("hidden")){clearInterval(classLoadTimer);loadClassList()}},500);
+  var originalOpen=window.openManagedProfileEditor;window.openManagedProfileEditor=async function(id){await originalOpen(id);var payload=byId("editPayload");if(payload){var pkg=JSON.parse(payload.value);populateClassPicker("editClassId",String(pkg.shahaf&&pkg.shahaf.class_id||""));window.loadBlockEditor(pkg)}};var originalSave=window.saveManagedProfile;window.saveManagedProfile=async function(){window.syncBlockEditor();var payload=byId("editPayload");if(payload){var pkg=JSON.parse(payload.value);pkg.shahaf=pkg.shahaf||{};pkg.shahaf.class_id=String(byId("editClassId").value||"").trim();payload.value=JSON.stringify(pkg)}return originalSave()};
   var observer=new MutationObserver(enhance);var profiles=byId("profiles");if(profiles)observer.observe(profiles,{childList:true});enhance();byId("cancelEdit").onclick=function(){byId("editPanel").classList.add("hidden")};byId("saveEdit").onclick=window.saveManagedProfile;byId("editTransitEnabled").onchange=setTransitFields;setTransitFields();
 })();</script>`;
 
@@ -283,6 +337,10 @@ export default {
       return json({ profiles: rows.results.map((row) => ({ public_id: row.public_id, active: Boolean(row.active), package: JSON.parse(row.package_json) })) });
     }
     const check = await auth(request, env, csrfRequired(request)); if (check.error) return check.error;
+    if (url.pathname === "/api/classes" && request.method === "GET") {
+      const result = await shahafClassOptions(env);
+      return json(result, 200, { "cache-control": "private, max-age=300" });
+    }
     if (url.pathname === "/api/session" && request.method === "GET") {
       const existingCsrf = cookie(request, "shahaf_csrf");
       if (existingCsrf && same(await hash(existingCsrf), check.row.csrf_hash)) return json({ csrf: existingCsrf }, 200, { "cache-control": "no-store" });
@@ -311,8 +369,10 @@ export default {
       const body = await request.json().catch(() => ({}));
       const classNumber = Number(body.class_number);
       if (!Number.isInteger(classNumber) || classNumber < 1) return json({ error: "shahaf.class_number must be supplied as a positive integer" }, 400);
+      const classId = String(body.class_id ?? body.package?.shahaf?.class_id ?? "").trim();
+      if (!classId) return json({ error: "shahaf.class_id must be supplied. Enter the Shahaf class ID (the cls value), not only the class number." }, 400);
       const packageInput = body.package && typeof body.package === "object" && !Array.isArray(body.package)
-        ? { ...body.package, shahaf: { ...(body.package.shahaf || {}), class_number: classNumber } }
+        ? { ...body.package, shahaf: { ...(body.package.shahaf || {}), class_id: classId, class_number: classNumber } }
         : body.package;
       const checked = validatePackage(packageInput); if (checked.errors) return json({ error: checked.errors.join("\n") }, 400);
       const name = String(body.name || checked.package.student.name || "").trim(); if (!name) return json({ error: "Enter the admin-only student name" }, 400);
@@ -332,10 +392,11 @@ export default {
       try { currentPackage = JSON.parse(current.package_json); } catch (_) { return json({ error: "stored profile data is malformed" }, 500); }
       const incoming = body.package && typeof body.package === "object" && !Array.isArray(body.package) ? body.package : currentPackage;
       const classNumber = body.class_number ?? incoming.shahaf?.class_number ?? currentPackage.shahaf?.class_number;
+      const classId = String(body.class_id ?? incoming.shahaf?.class_id ?? currentPackage.shahaf?.class_id ?? "").trim();
       const packageInput = {
         ...incoming,
         student: { ...(incoming.student || {}), name: String(body.name ?? incoming.student?.name ?? current.name).trim() },
-        shahaf: { ...(incoming.shahaf || {}), class_number: classNumber },
+        shahaf: { ...(incoming.shahaf || {}), class_id: classId, class_number: classNumber },
       };
       const checked = validatePackage(packageInput); if (checked.errors) return json({ error: checked.errors.join("\n") }, 400);
       const name = checked.package.student.name || current.name;
