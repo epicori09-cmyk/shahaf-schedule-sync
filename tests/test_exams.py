@@ -20,6 +20,7 @@ EXAMS_HTML = """<!doctype html>
   <li class="ChangesInfo">11.09.2026, <b>מבחן בדיפלומטיה</b> משיעור 1 עד שיעור 3 לכיתות: יא-2 בקבוצה של מורה אחר</li>
   <li class="ChangesInfo">12.09.2026, <b>מבחן באנגלית 5 יח״ל מואץ</b> משיעור 1 עד שיעור 3 לכיתות: יא-1...יא-9</li>
   <li class="ChangesInfo">15.09.2026, <b>מבחן פתיחת שנה בביולוגיה</b> משיעור 1 עד שיעור 3 לכיתות: יא-2</li>
+  <li class="ChangesInfo">16.09.2026, <b>מבחן במזרחנות</b> משיעור 1 עד שיעור 3 לכיתות: יא-2 בקבוצה של גלוסקא שירי, חדר: י״א 7 - 214</li>
 </ul></body></html>"""
 
 
@@ -53,6 +54,24 @@ class ExamTests(unittest.TestCase):
                 (date(2026, 9, 12), "אנגלית 5 יח״ל מואץ", 1, 3),
             ],
         )
+
+    def test_include_all_keeps_parallel_major_candidates_for_profile_matching(self) -> None:
+        snapshot = parse_exams_html(
+            EXAMS_HTML,
+            date(2026, 9, 2),
+            expected_class_number=2,
+            expected_class_id="11",
+            include_all=True,
+        )
+        self.assertEqual(len(snapshot.exams), 7)
+        math_groups = [item for item in snapshot.exams if item.subject.startswith("מתמטיקה")]
+        self.assertEqual(len(math_groups), 1)
+        self.assertEqual(math_groups[0].teacher, "מתמטיקה")
+        self.assertEqual(math_groups[0].title, "מבחן במתמטיקה")
+        self.assertTrue(any(item.subject == "ביולוגיה" for item in snapshot.exams))
+        mizrahnut = next(item for item in snapshot.exams if item.subject == "מזרחנות")
+        self.assertEqual(mizrahnut.teacher, "גלוסקא שירי")
+        self.assertEqual(mizrahnut.room, "י״א 7 - 214")
 
     def test_reconcile_adds_four_day_seven_pm_calendar_alarm(self) -> None:
         snapshot = parse_exams_html(EXAMS_HTML, date(2026, 9, 2), expected_class_number=2, expected_class_id="11")

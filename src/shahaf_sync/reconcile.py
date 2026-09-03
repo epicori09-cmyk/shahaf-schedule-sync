@@ -6,7 +6,8 @@ import hashlib
 import re
 
 from .ics import Calendar, IcsEvent, unescape
-from .model import PERIOD_TIMES, Lesson, PublishedChange, SourceSnapshot
+from .events import decision_allows_suppression, decision_value, event_key, event_overlaps_lesson, event_uid, event_window
+from .model import PERIOD_TIMES, Lesson, PublishedChange, ShahafEvent, SourceSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,3 +216,75 @@ def reconcile_calendar(
         changes.append(ChangeRecord("changed", change.date, change.period, subject, detail))
 
     return sorted(changes, key=lambda item: (item.date, item.period, item.kind, item.subject))
+
+
+def _event_lesson_data(event: IcsEvent, occurrence: datetime) -> dict[str, object]:
+    return {
+        "date": occurrence.date().isoformat(),
+        "period": event.period,
+        "start": occurrence.strftime("%H:%M"),
+        "end": (occurrence + (event.end - event.start)).strftime("%H:%M"),
+    }
+
+
+def reconcile_event_entries(
+    calendar: Calendar,
+    events: list[ShahafEvent],
+    decisions: dict[tuple[object, ...], object],
+    class_number: int,
+    window_start: date,
+    window_end: date,
+) -> None:
+    """Overlay Shahaf events and apply only approved school closures.
+
+    Event VEVENTs are additive and deterministic. Lesson exclusions are kept
+    under a separate marker so they can never erase an ordinary cancellation.
+    """
+    for event in sorted(events, key=lambda item: (item.date, item.title)):
+        if not (window_start <= event.date <= window_end) or not event.applies_to_class(class_number):
+            continue
+        decision = decisions.get(event_key(event))
+        for base in list(calendar.events):
+            if base.recurrence_id is not None or base.period is None:
+                continue
+            occurrences = base.occurrences(
+                datetime.combine(event.date, time.min),
+                datetime.combine(event.date, time.max),
+                include_exdates=True,
+            )
+            for occurrence in occurrences:
+                if occurrence.date() != event.date:
+                    continue
+                if decision_allows_suppression(decision) and event_overlaps_lesson(
+                    event, _event_lesson_data(base, occurrence)
+                ):
+                    base.add_event_exdate(occurrence)
+                elif (
+                    decision is not None
+                    and str(decision_value(decision, "classification", "")) == "normal_school"
+                    and event_overlaps_lesson(event, _event_lesson_data(base, occurrence))
+                ):
+                    base.remove_event_exdate(occurrence)
+
+        window = event_window(event)
+        if window is None:
+            continue
+        start, end = window
+        description = event.detail or event.title
+        if event.class_scope:
+            description += f"\nכיתות: {event.class_scope}"
+        if decision is not None:
+            classification = str(decision_value(decision, "classification", "uncertain"))
+            description += f"\nסיווג: {classification}"
+            reason = str(decision_value(decision, "reason", "")).strip()
+            if reason:
+                description += f"\nהחלטת בטיחות: {reason}"
+        calendar.add_generated_event(
+            event_uid(event),
+            datetime.combine(event.date, start),
+            datetime.combine(event.date, end),
+            event.title,
+            description,
+            "",
+            properties={"X-SHAHAF-EVENT": "1"},
+        )

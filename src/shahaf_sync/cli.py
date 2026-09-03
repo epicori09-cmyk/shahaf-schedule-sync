@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import argparse
 import json
 import os
@@ -12,14 +12,15 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from .github import GistClient, GitHubError
+from .events import apply_event_decisions, decision_allows_suppression, event_key, event_requires_review, event_to_dict
 from .exams import reconcile_exam_events
 from .ics import CalendarFormatError, parse_calendar
-from .model import Lesson, SourceSnapshot
-from .nim import NimError, NimSafetyClient, context_for_alarm_review
+from .model import EventSnapshot, Lesson, SourceSnapshot
+from .nim import EventSafetyDecision, NimError, NimSafetyClient, context_for_alarm_review, context_for_event_review
 from .profiles import apply_changes, lesson_to_dict, select_changes, select_exams, select_lessons
 from .profile_package import ProfilePackageError, build_package_schedule, package_to_spec, validate_package
-from .reconcile import ChangeRecord, reconcile_calendar
-from .shahaf import ShahafSourceError, parse_changes_html, parse_exams_html, parse_timetable_html
+from .reconcile import ChangeRecord, reconcile_calendar, reconcile_event_entries
+from .shahaf import ShahafSourceError, parse_changes_html, parse_events_html, parse_exams_html, parse_timetable_html
 from .site import build_schedule, build_wake_data, render_site
 from .transit import (
     TransitSourceError,
@@ -96,6 +97,7 @@ def fetch_exams(
     today: date,
     class_id: str | None = None,
     class_number: int | None = None,
+    include_all: bool = False,
 ):
     selected_class_id = class_id or config.class_id
     url = f"{config.source_base_url}?cls={selected_class_id}&tab=exams"
@@ -107,9 +109,24 @@ def fetch_exams(
             url,
             expected_class_number=class_number if class_number is not None else config.class_number,
             expected_class_id=selected_class_id,
+            include_all=include_all,
         )
     except (ShahafSourceError, SyncFailure) as exc:
         raise SyncFailure(f"Shahaf exams feed is not trustworthy: {exc}") from exc
+
+
+def fetch_events(
+    config: Config,
+    today: date,
+    class_id: str | None = None,
+) -> EventSnapshot:
+    selected_class_id = class_id or config.class_id
+    url = f"{config.source_base_url}?cls={selected_class_id}&tab=events"
+    try:
+        html = fetch_text(url)
+        return parse_events_html(html, today, url, expected_class_id=selected_class_id)
+    except (ShahafSourceError, SyncFailure) as exc:
+        raise SyncFailure(f"Shahaf events feed is not trustworthy: {exc}") from exc
 
 
 def _now(config: Config) -> datetime:
@@ -142,6 +159,9 @@ def _profile_failure(
         result.setdefault("class_id", str(spec.get("class_id", "")))
         result["stale"] = True
         result["error"] = error
+        result.setdefault("events", [])
+        result["events_available"] = False
+        result["events_error"] = error
         return result
     return {
         "id": str(spec.get("id", "profile")),
@@ -153,6 +173,9 @@ def _profile_failure(
         "changes": [],
         "exams": [],
         "exams_available": False,
+        "events": [],
+        "events_available": False,
+        "events_error": error,
         "source_updated": "",
         "last_successful_sync": "",
         "stale": True,
@@ -200,6 +223,95 @@ def _dict_exam(exam: object) -> dict[str, object]:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class EventProcessing:
+    events: list[dict[str, object]]
+    schedule: list[dict[str, object]]
+    decisions: dict[tuple[object, ...], object]
+    alarm_safety: str
+    alarm_safety_reason: str
+
+
+def _process_events(
+    *,
+    snapshot: EventSnapshot | None,
+    schedule: list[dict[str, object]],
+    exams: list[object],
+    class_number: int,
+    current: datetime,
+    profile_id: str,
+    nim_client: NimSafetyClient | None,
+) -> EventProcessing:
+    if snapshot is None:
+        return EventProcessing([], schedule, {}, "blocked", "Shahaf events are unavailable; preserving the current alarm.")
+    relevant = [event for event in snapshot.events if event.applies_to_class(class_number)]
+    decisions: dict[tuple[object, ...], object] = {}
+    blocked_reasons: list[str] = []
+    approved_reasons: list[str] = []
+    for event in relevant:
+        if not event_requires_review(event):
+            continue
+        event_data = event_to_dict(event)
+        event_date = event.date.isoformat()
+        lessons_on_date = [item for item in schedule if str(item.get("date", "")) == event_date]
+        exams_on_date = [
+            _dict_exam(item)
+            for item in exams
+            if getattr(item, "date", None) is not None and item.date.isoformat() == event_date
+        ]
+        if nim_client is None:
+            decision: object = EventSafetyDecision(
+                "uncertain",
+                False,
+                "high",
+                "NVIDIA_API_KEY is not configured; preserving the current schedule and alarm.",
+            )
+        else:
+            try:
+                decision = nim_client.classify_event(
+                    context_for_event_review(
+                        profile=profile_id,
+                        event=event_data,
+                        lessons_on_date=lessons_on_date,
+                        exams_on_date=exams_on_date,
+                        now=current.isoformat(),
+                    )
+                )
+            except NimError as exc:
+                decision = EventSafetyDecision("uncertain", False, "high", str(exc))
+        decisions[event_key(event)] = decision
+        if decision_allows_suppression(decision):
+            approved_reasons.append(f"{event.title}: {decision.reason}")
+        elif str(getattr(decision, "classification", "uncertain")) in {"uncertain", "no_school", "remote_learning"}:
+            blocked_reasons.append(f"{event.title}: {decision.reason}")
+
+    filtered_schedule = apply_event_decisions(schedule, relevant, decisions)
+    serialized = [event_to_dict(event, decisions.get(event_key(event))) for event in relevant]
+    if blocked_reasons:
+        return EventProcessing(
+            serialized,
+            filtered_schedule if not blocked_reasons else schedule,
+            decisions,
+            "blocked",
+            "Event review required: " + " | ".join(blocked_reasons),
+        )
+    if approved_reasons:
+        return EventProcessing(
+            serialized,
+            filtered_schedule,
+            decisions,
+            "approved",
+            "Event review approved: " + " | ".join(approved_reasons),
+        )
+    return EventProcessing(
+        serialized,
+        schedule,
+        decisions,
+        "not-required",
+        "Ordinary Shahaf events are overlays; normal lessons and alarms remain unchanged.",
+    )
+
+
 def _alarm_safety(
     *,
     wake: dict[str, object],
@@ -207,6 +319,8 @@ def _alarm_safety(
     schedule: list[dict[str, object]],
     exams: list[object],
     current: datetime,
+    event_alarm_safety: str = "not-required",
+    event_alarm_safety_reason: str = "",
 ) -> tuple[str, str]:
     """Return approved/not-required/blocked without ever failing the sync.
 
@@ -216,10 +330,14 @@ def _alarm_safety(
     deliberately treated as blocked, so the iPhone keeps its current alarm.
     """
     action = str(wake.get("shortcut_action", "leave"))
+    if event_alarm_safety == "blocked":
+        return "blocked", event_alarm_safety_reason or "Event review was unavailable; preserving the current alarm."
     today = current.date().isoformat()
     today_changes = [_dict_change(item) for item in changes if item.date.isoformat() == today]
     needs_review = action == "clear" or (action == "set" and bool(today_changes))
     if not needs_review:
+        if event_alarm_safety == "approved":
+            return "approved", event_alarm_safety_reason or "Event review approved the alarm change."
         return "not-required", "No destructive schedule change needs AI review."
     api_key = os.environ.get("NVIDIA_API_KEY", "")
     if not api_key:
@@ -258,6 +376,9 @@ def _build_public_profile(
     config: Config,
     spec: dict[str, object],
     current: datetime,
+    *,
+    events_snapshot: EventSnapshot | None = None,
+    nim_client: NimSafetyClient | None = None,
 ) -> dict[str, object]:
     profile_id = str(spec.get("id", "profile"))
     class_id = str(spec.get("class_id", ""))
@@ -319,8 +440,32 @@ def _build_public_profile(
             current.date(),
             class_id=class_id,
             class_number=class_number,
+            include_all=True,
         )
-    exams = select_exams(exams_snapshot.exams, spec)
+    exams = select_exams(exams_snapshot.exams, spec, lessons=selected_lessons)
+    if events_snapshot is None:
+        events_snapshot = fetch_events(config, current.date(), class_id=class_id)
+    event_processing = _process_events(
+        snapshot=events_snapshot,
+        schedule=[lesson_to_dict(item) for item in selected_lessons],
+        exams=exams,
+        class_number=class_number,
+        current=current,
+        profile_id=profile_id,
+        nim_client=nim_client,
+    )
+    selected_lessons = [
+        Lesson(
+            date.fromisoformat(str(item["date"])),
+            int(item["period"]),
+            time.fromisoformat(str(item["start"])),
+            time.fromisoformat(str(item["end"])),
+            str(item.get("subject", "")),
+            str(item.get("teacher", "")),
+            str(item.get("room", "")),
+        )
+        for item in event_processing.schedule
+    ]
     change_records = [
         ChangeRecord(
             item.kind,
@@ -342,6 +487,11 @@ def _build_public_profile(
         "changes": change_records,
         "exams": exams,
         "exams_available": True,
+        "events": event_processing.events,
+        "events_available": True,
+        "events_source_updated": events_snapshot.update_text,
+        "events_alarm_safety": event_processing.alarm_safety,
+        "events_alarm_safety_reason": event_processing.alarm_safety_reason,
         "source_url": source_url,
         "source_updated": update_text or changes_snapshot.update_text,
         "last_successful_sync": current.isoformat(),
@@ -408,14 +558,50 @@ def execute(
         gist_file = client.read_file(config.gist_id, config.gist_filename)
         calendar = parse_calendar(gist_file.content)
         snapshot, _urls = fetch_source(config, current.date())
-        exam_snapshot = fetch_exams(config, current.date())
+        exam_snapshot = fetch_exams(config, current.date(), include_all=True)
+        event_snapshot = fetch_events(config, current.date())
         changes = reconcile_calendar(
             calendar,
             snapshot,
             current.date(),
             current.date() + timedelta(days=config.lookahead_days),
         )
-        reconcile_exam_events(calendar, exam_snapshot.exams)
+        pre_event_schedule = build_schedule(
+            calendar,
+            current.date().isoformat(),
+            (current.date() + timedelta(days=config.lookahead_days)).isoformat(),
+        )
+        root_exam_spec: dict[str, object] = {
+            "exam_terms": [],
+            "exam_exact_terms": [],
+        }
+        root_exams = select_exams(exam_snapshot.exams, root_exam_spec, lessons=pre_event_schedule)
+        reconcile_exam_events(calendar, root_exams)
+        nim_client = (
+            NimSafetyClient(
+                os.environ["NVIDIA_API_KEY"],
+                model=os.environ.get("NVIDIA_NIM_MODEL") or "openai/gpt-oss-20b",
+            )
+            if os.environ.get("NVIDIA_API_KEY")
+            else None
+        )
+        root_event_processing = _process_events(
+            snapshot=event_snapshot,
+            schedule=pre_event_schedule,
+            exams=root_exams,
+            class_number=config.class_number,
+            current=current,
+            profile_id="master-ya2",
+            nim_client=nim_client,
+        )
+        reconcile_event_entries(
+            calendar,
+            event_snapshot.events,
+            root_event_processing.decisions,
+            config.class_number,
+            current.date(),
+            current.date() + timedelta(days=config.lookahead_days),
+        )
         updated_content = calendar.render()
         if updated_content != gist_file.content and not dry_run:
             client.update_file(config.gist_id, config.gist_filename, updated_content)
@@ -434,8 +620,10 @@ def execute(
             wake=candidate_wake,
             changes=changes,
             schedule=schedule,
-            exams=exam_snapshot.exams,
+            exams=root_exams,
             current=current,
+            event_alarm_safety=root_event_processing.alarm_safety,
+            event_alarm_safety_reason=root_event_processing.alarm_safety_reason,
         )
         profile_specs = [dict(spec) for spec in config.additional_profiles]
         try:
@@ -448,13 +636,25 @@ def execute(
         profile_specs_by_id: dict[str, dict[str, object]] = {}
         changes_cache: dict[str, object] = {str(config.class_id): snapshot}
         exams_cache: dict[tuple[str, int], object] = {(str(config.class_id), config.class_number): exam_snapshot}
+        events_cache: dict[str, EventSnapshot] = {str(config.class_id): event_snapshot}
         for spec in profile_specs:
             try:
                 # Keep the established config-driven profiles on their old
                 # path byte-for-byte in behavior. Only Worker-managed
                 # profiles use the shared class/exam cache below.
                 if not spec.get("managed_profile"):
-                    profile_views.append(_build_public_profile(config, spec, current))
+                    class_id = str(spec.get("class_id", ""))
+                    if class_id not in events_cache:
+                        events_cache[class_id] = fetch_events(config, current.date(), class_id=class_id)
+                    profile_views.append(
+                        _build_public_profile(
+                            config,
+                            spec,
+                            current,
+                            events_snapshot=events_cache[class_id],
+                            nim_client=nim_client,
+                        )
+                    )
                     profile_specs_by_id[str(spec.get("id", "profile"))] = spec
                     continue
                 class_id = str(spec.get("class_id", ""))
@@ -463,12 +663,25 @@ def execute(
                     changes_cache[class_id], _ = fetch_source(config, current.date(), class_id=class_id)
                 if (class_id, class_number) not in exams_cache:
                     exams_cache[(class_id, class_number)] = fetch_exams(
-                        config, current.date(), class_id=class_id, class_number=class_number
+                        config,
+                        current.date(),
+                        class_id=class_id,
+                        class_number=class_number,
+                        include_all=True,
                     )
+                if class_id not in events_cache:
+                    events_cache[class_id] = fetch_events(config, current.date(), class_id=class_id)
                 profile_spec = dict(spec)
                 profile_spec["changes_snapshot"] = changes_cache[class_id]
                 profile_spec["exams_snapshot"] = exams_cache[(class_id, class_number)]
-                profile = _build_public_profile(config, profile_spec, current)
+                profile_spec["events_snapshot"] = events_cache[class_id]
+                profile = _build_public_profile(
+                    config,
+                    profile_spec,
+                    current,
+                    events_snapshot=events_cache[class_id],
+                    nim_client=nim_client,
+                )
                 profile_specs_by_id[str(profile.get("id"))] = profile_spec
                 profile_views.append(profile)
             except (ShahafSourceError, SyncFailure, ValueError, OSError) as profile_exc:
@@ -554,7 +767,10 @@ def execute(
             stale=False,
             last_successful_sync=current.isoformat(),
             schedule=schedule,
-            exams=exam_snapshot.exams,
+            exams=root_exams,
+            events=root_event_processing.events,
+            events_available=True,
+            events_source_updated=event_snapshot.update_text,
             now=current,
             alarm_safety=alarm_safety,
             alarm_safety_reason=alarm_safety_reason,
@@ -566,6 +782,7 @@ def execute(
                 continue
             profile_schedule = profile.get("schedule") if profile.get("schedule_available") else None
             profile_exams = profile.get("exams") if profile.get("exams_available") else None
+            profile_events = profile.get("events") if profile.get("events_available") else None
             profile_output = site_path / "students" / str(profile.get("id")) if managed else ya1_site_path
             render_site(
                 profile_output,
@@ -579,7 +796,13 @@ def execute(
                 error=str(profile.get("error", "")),
                 schedule=profile_schedule if isinstance(profile_schedule, list) else None,
                 exams=profile_exams if isinstance(profile_exams, list) else None,
+                events=profile_events if isinstance(profile_events, list) else None,
+                events_available=bool(profile.get("events_available", False)),
+                events_error=str(profile.get("events_error", "")),
+                events_source_updated=str(profile.get("events_source_updated", "")),
                 now=current,
+                alarm_safety=str(profile.get("events_alarm_safety", "not-required")),
+                alarm_safety_reason=str(profile.get("events_alarm_safety_reason", "")),
                 profile_id=str(profile.get("id", "ya1")),
                 profile_label="Student schedule" if managed else str(profile.get("label", "Grade 11-1")),
                 profile_mark="STUDENT" if managed else str(profile.get("mark", "XI·1")),

@@ -11,7 +11,7 @@ explicit rather than guessing from a subject name alone.
 from dataclasses import replace
 from datetime import time
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from .model import Exam, Lesson, PERIOD_TIMES, PublishedChange
 
@@ -24,6 +24,143 @@ def _text(value: str) -> str:
 
 def _matches(value: str, expected: str) -> bool:
     return _text(value) == _text(expected)
+
+
+def _person_matches(left: str, right: str) -> bool:
+    """Match Hebrew names even when Shahaf reverses first/last-name order."""
+    left_tokens = set(re.findall(r"[\wא-ת]+", _text(left), flags=re.UNICODE))
+    right_tokens = set(re.findall(r"[\wא-ת]+", _text(right), flags=re.UNICODE))
+    return bool(left_tokens and right_tokens and left_tokens == right_tokens)
+
+
+def _value(item: object, name: str, default: Any = "") -> Any:
+    if isinstance(item, Mapping):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _exam_family(value: str) -> str:
+    text = _text(value)
+    if "מתמט" in text:
+        return "math"
+    if "אנגלית" in text:
+        return "english"
+    if "מדעי המחשב" in text or "מדמח" in text or "מדמ" in text:
+        return "computer-science"
+    if "סייבר" in text:
+        return "cyber"
+    for needle, family in (
+        ("פיסיק", "physics"),
+        ("דיפלומט", "diplomacy"),
+        ("ספרות", "literature"),
+        ("עברית", "hebrew"),
+        ("תנך", "bible"),
+        ("היסטור", "history"),
+        ("חינוך", "education"),
+        ("ביולוג", "biology"),
+        ("כימ", "chemistry"),
+        ("מזרחנות", "mizrahnut"),
+        ("ערבית", "arabic"),
+        ("אזרחות", "civics"),
+        ("גיאוגרפ", "geography"),
+        ("מדעי החברה", "social-sciences"),
+    ):
+        if needle in text:
+            return family
+    return ""
+
+
+def _profile_track_subjects(lessons: list[object]) -> dict[str, list[str]]:
+    tracks: dict[str, list[str]] = {}
+    for lesson in lessons:
+        subject = str(_value(lesson, "subject", ""))
+        family = _exam_family(subject)
+        if family:
+            tracks.setdefault(family, []).append(subject)
+    return tracks
+
+
+def _track_subject(family: str, subjects: list[str]) -> str:
+    """Choose the useful profile label to display for a matched exam."""
+    unique = list(dict.fromkeys(subjects))
+    if not unique:
+        return ""
+    if family == "computer-science":
+        plain = [item for item in unique if "הערכה" not in _text(item)]
+        return min(plain or unique, key=lambda item: (len(_text(item)), _text(item)))
+    if family == "cyber":
+        return max(unique, key=lambda item: (len(_text(item)), _text(item)))
+    return max(unique, key=lambda item: (len(_text(item)), _text(item)))
+
+
+def _exam_group_parts(exam: Exam) -> tuple[str, str]:
+    teacher = str(exam.teacher or "").strip()
+    room = str(exam.room or "").strip()
+    group = str(exam.group or "").strip()
+    if not teacher:
+        room_match = re.match(r"^(.*?),\s*חדר:\s*(.+)$", group)
+        if room_match:
+            teacher, room = room_match.group(1).strip(), room_match.group(2).strip()
+        else:
+            teacher = group
+    return teacher, room
+
+
+def _exam_level_conflict(exam: Exam, subject: str, family: str) -> bool:
+    if family not in {"math", "english"}:
+        return False
+    exam_text = _text(exam.title or exam.subject)
+    profile_text = _text(subject)
+    exam_four = bool(re.search(r"\b4\s*יח", exam_text))
+    exam_five = bool(re.search(r"\b5\s*יח", exam_text))
+    profile_four = bool(re.search(r"\b4\s*יח", profile_text))
+    profile_five = bool(re.search(r"\b5\s*יח", profile_text))
+    if exam_four and not profile_four:
+        return True
+    if exam_five and profile_four:
+        return True
+    exam_accelerated = "מואץ" in exam_text
+    profile_accelerated = "מואץ" in profile_text
+    if exam_accelerated and not profile_accelerated:
+        return True
+    if profile_accelerated and exam_five and not exam_accelerated:
+        return True
+    return False
+
+
+def _exam_specificity(exam: Exam, profile_lessons: list[object], family: str) -> int | None:
+    matching_lessons = [
+        lesson
+        for lesson in profile_lessons
+        if _exam_family(str(_value(lesson, "subject", ""))) == family
+        and not _exam_level_conflict(exam, str(_value(lesson, "subject", "")), family)
+    ]
+    if not matching_lessons:
+        return None
+    teacher, room = _exam_group_parts(exam)
+    normalized_teacher = _text(teacher)
+    generic_groups = {"math": {"מתמטיקה"}, "english": {"אנגלית"}}
+    is_generic = not teacher or normalized_teacher in generic_groups.get(family, set())
+    teacher_match = any(
+        _person_matches(teacher, str(_value(lesson, "teacher", "")))
+        for lesson in matching_lessons
+        if teacher and not is_generic
+    )
+    room_match = any(
+        _matches(room, str(_value(lesson, "room", "")))
+        for lesson in matching_lessons
+        if room and not is_generic
+    )
+    if not is_generic and not teacher_match and not room_match:
+        return None
+    score = 3 if is_generic else 7
+    if teacher_match:
+        score += 4
+    if room_match:
+        score += 2
+    if any(_matches(str(_value(lesson, "subject", "")), exam.subject) for lesson in matching_lessons):
+        score += 2
+    return score
 
 
 def _selector_matches(lesson: Lesson, selector: dict[str, Any]) -> bool:
@@ -152,15 +289,72 @@ def _change_times(change: PublishedChange) -> tuple[time, time]:
     return change.start or default_start, change.end or default_end
 
 
-def select_exams(exams: list[Exam], spec: dict[str, Any]) -> list[Exam]:
+def select_exams(
+    exams: list[Exam],
+    spec: dict[str, Any],
+    lessons: list[object] | None = None,
+) -> list[Exam]:
+    """Select each student's exams from Shahaf's mixed major-group feed.
+
+    When lessons are available, schedule evidence is authoritative: a test
+    must belong to one of the student's subject families, and a named Shahaf
+    group must match that student's teacher or room. If several rows describe
+    the same test, the most specific match wins over the generic grade-wide
+    row. The old term-only behavior remains as a compatibility fallback for
+    callers that do not provide a schedule.
+    """
     terms = [_text(str(value)) for value in spec.get("exam_terms", [])]
     exact_terms = {_text(str(value)) for value in spec.get("exam_exact_terms", [])}
-    return [
-        exam
-        for exam in exams
-        if (not exact_terms or _text(exam.subject) in exact_terms)
-        and any(term and (term in _text(exam.subject) or term in _text(exam.group)) for term in terms)
-    ]
+    if lessons is None:
+        return [
+            exam
+            for exam in exams
+            if (not exact_terms or _text(exam.subject) in exact_terms)
+            and any(term and (term in _text(exam.subject) or term in _text(exam.group)) for term in terms)
+        ]
+
+    tracks = _profile_track_subjects(lessons)
+    candidates: list[tuple[int, Exam, str]] = []
+    for exam in exams:
+        family = _exam_family(exam.subject or exam.title)
+        if not family or family not in tracks:
+            continue
+        scores: list[int] = []
+        for subject in tracks[family]:
+            score = _exam_specificity(exam, lessons, family)
+            if score is not None:
+                if _matches(subject, exam.subject):
+                    score += 2
+                scores.append(score)
+        if not scores:
+            continue
+        # A generic Shahaf title such as "מבחן במתמטיקה" does not identify
+        # the student's level. Label it with the matched profile track while
+        # retaining the original title and detail in the exam record.
+        display_subject = _track_subject(family, tracks[family]) or exam.subject
+        if exact_terms and _text(exam.subject) not in exact_terms and _text(display_subject) not in exact_terms:
+            # Exact terms are an explicit administrator restriction, but a
+            # generic source title may still be represented by the profile's
+            # exact track label.
+            continue
+        candidates.append((max(scores), replace(exam, subject=display_subject), family))
+
+    best: dict[tuple[object, ...], tuple[int, Exam]] = {}
+    for score, exam, family in candidates:
+        key = (exam.date, family, exam.start_period, exam.end_period)
+        previous = best.get(key)
+        tie_break = (_text(exam.teacher or exam.group), _text(exam.room), _text(exam.title))
+        previous_tie = (
+            _text(previous[1].teacher or previous[1].group),
+            _text(previous[1].room),
+            _text(previous[1].title),
+        ) if previous else None
+        if previous is None or score > previous[0] or (score == previous[0] and tie_break < previous_tie):
+            best[key] = (score, exam)
+    return sorted(
+        (item[1] for item in best.values()),
+        key=lambda exam: (exam.date, exam.start_period, _text(exam.subject), _text(exam.group)),
+    )
 
 
 def lesson_to_dict(lesson: Lesson) -> dict[str, Any]:

@@ -69,6 +69,53 @@ class ProfileTests(unittest.TestCase):
         )
         self.assertEqual([item.subject for item in selected], ["מתמטיקה 5 יח״ל"])
 
+    def test_exam_matching_uses_major_teacher_and_prefers_specific_room(self) -> None:
+        exams = [
+            Exam(
+                date(2026, 9, 6),
+                "מתמטיקה 5 יח״ל מואץ",
+                4,
+                6,
+                title="מבחן במתמטיקה",
+                group="מתמטיקה",
+                teacher="מתמטיקה",
+            ),
+            Exam(
+                date(2026, 9, 6),
+                "מתמטיקה 5 יח״ל מואץ",
+                4,
+                6,
+                title="מבחן במתמטיקה",
+                group="מלישקביץ יובל, חדר: י״א 2 - 217",
+                teacher="מלישקביץ יובל",
+                room="י״א 2 - 217",
+            ),
+            Exam(date(2026, 9, 10), "ביולוגיה", 1, 3, title="מבחן פתיחת שנה בביולוגיה", teacher="מורה אחר"),
+            Exam(date(2026, 9, 12), "אנגלית 4 יח״ל", 1, 3, title="מבחן באנגלית 4 יח״ל", teacher="שניאור רני"),
+        ]
+        lessons = [
+            Lesson(date(2026, 9, 7), 4, time(10, 45), time(11, 25), "מתמטיקה 5 יח״ל", "מלישקביץ יובל", "י״א 2 - 217"),
+            Lesson(date(2026, 9, 7), 1, time(8, 30), time(9, 10), "אנגלית 5 יח״ל", "שניאור רני", "י״א 4 - 109"),
+        ]
+        selected = select_exams(exams, {}, lessons=lessons)
+        self.assertEqual(
+            [(item.subject, item.teacher, item.room) for item in selected],
+            [("מתמטיקה 5 יח״ל", "מלישקביץ יובל", "י״א 2 - 217")],
+        )
+
+    def test_exam_matching_keeps_accelerated_math_track_and_cs_track(self) -> None:
+        exams = [
+            Exam(date(2026, 9, 6), "מתמטיקה 5 יח״ל מואץ", 4, 6, title="מבחן במתמטיקה", teacher="מתמטיקה"),
+            Exam(date(2026, 9, 6), "מתמטיקה 5 יח״ל", 4, 6, title="מבחן במתמטיקה 5 יח״ל", teacher="מלישקביץ יובל"),
+            Exam(date(2026, 9, 10), "מדעי המחשב 1", 7, 9, title="מבחן מעבר במדמ״ח", teacher="מן שמרת"),
+        ]
+        lessons = [
+            Lesson(date(2026, 9, 6), 4, time(10, 45), time(11, 25), "מתמטיקה 5 יח״ל מואץ", "אפי כהן", "י״א 7 - 214"),
+            Lesson(date(2026, 9, 8), 1, time(8, 30), time(9, 10), "מדעי המחשב 1", "מן שמרת", ""),
+        ]
+        selected = select_exams(exams, {}, lessons=lessons)
+        self.assertEqual([item.subject for item in selected], ["מתמטיקה 5 יח״ל מואץ", "מדעי המחשב 1"])
+
     def test_ya1_transcribed_baseline_keeps_the_supplied_periods_and_gaps(self) -> None:
         lessons = build_ya1_schedule(date(2026, 9, 6), date(2026, 9, 10))
         sunday = {(item.period, item.subject) for item in lessons if item.date == date(2026, 9, 6)}
@@ -88,6 +135,27 @@ class ProfileTests(unittest.TestCase):
         self.assertIn((1, "מדעי המחשב"), tuesday)
         self.assertIn((6, "פיסיקה"), tuesday)
         self.assertNotIn((0, "פיסיקה"), tuesday)
+
+    def test_mizrahnut_exam_matches_nitay_but_not_profiles_without_that_major(self) -> None:
+        exams = [
+            Exam(
+                date(2026, 9, 14),
+                "מזרחנות",
+                1,
+                3,
+                title="מבחן במזרחנות",
+                teacher="גלוסקא שירי",
+                room="י״א 7 - 214",
+            ),
+        ]
+        nitay_lessons = [
+            Lesson(date(2026, 9, 7), 1, time(8, 30), time(9, 10), "מזרחנות", "גלוסקא שירי", "י״א 7 - 214"),
+        ]
+        ori_lessons = [
+            Lesson(date(2026, 9, 7), 1, time(8, 30), time(9, 10), "מדעי המחשב", "מן שמרת", "מעבדת מחשבים 153"),
+        ]
+        self.assertEqual(select_exams(exams, {}, lessons=nitay_lessons)[0].subject, "מזרחנות")
+        self.assertEqual(select_exams(exams, {}, lessons=ori_lessons), [])
 
 
 if __name__ == "__main__":

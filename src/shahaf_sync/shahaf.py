@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from html import unescape
 from html.parser import HTMLParser
 import re
 from dataclasses import dataclass, field
 
-from .model import Exam, ExamSnapshot, Lesson, PERIOD_TIMES, PublishedChange, SourceSnapshot
+from .model import EventSnapshot, Exam, ExamSnapshot, Lesson, PERIOD_TIMES, PublishedChange, ShahafEvent, SourceSnapshot
 
 
 class ShahafSourceError(ValueError):
@@ -411,9 +411,153 @@ def parse_changes_html(
     )
 
 
+def _event_class_scope(value: str) -> tuple[tuple[int, ...], bool]:
+    """Extract only explicit grade-11 class membership from an event row."""
+    text = unescape(value).casefold().replace("\u00a0", " ")
+    all_classes = bool(re.search(r"כל\s+הכיתות|all\s+classes", text, re.IGNORECASE))
+    numbers = {int(item) for item in re.findall(r"יא\s*[-–]?\s*(\d+)", text)}
+    for first, last in re.findall(
+        r"יא\s*[-–]?\s*(\d+)\s*\.\.\.\s*יא\s*[-–]?\s*(\d+)", text
+    ):
+        low, high = sorted((int(first), int(last)))
+        numbers.update(range(low, high + 1))
+    return tuple(sorted(numbers)), all_classes
+
+
+def parse_events_html(
+    html: str,
+    reference_date: date,
+    source_url: str = "",
+    expected_class_id: str = "11",
+) -> EventSnapshot:
+    """Parse Shahaf's explicit school-event feed.
+
+    The feed is informational by default. Only events whose title explicitly
+    indicates asynchronous/remote/no-school operation are eligible for the
+    separate AI safety decision; ordinary activities remain overlays.
+    """
+    parser = _TreeParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception as exc:
+        raise ShahafSourceError(f"Shahaf events page is malformed: {exc}") from exc
+
+    select_match = re.search(
+        r"<select\b[^>]*\bname=[\"']cls[\"'][^>]*>(.*?)</select>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if select_match:
+        selected_class = any(
+            re.search(rf"\bvalue=[\"']{re.escape(expected_class_id)}[\"']", attrs, re.IGNORECASE)
+            and re.search(r"\bselected(?:\s*=|\b)", attrs, re.IGNORECASE)
+            for attrs in re.findall(r"<option\b([^>]*)>", select_match.group(1), flags=re.IGNORECASE)
+        )
+        if not selected_class:
+            raise ShahafSourceError(f"Shahaf events page is not selected for class {expected_class_id}")
+
+    update_match = re.search(
+        r"<div[^>]*class=[\"'][^\"']*UpdateDate[^\"']*[\"'][^>]*>(.*?)</div>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    update_text = _plain(update_match.group(1)) if update_match else ""
+    if not update_text:
+        raise ShahafSourceError("Shahaf events page has no update timestamp")
+
+    rows = [
+        node
+        for node in _walk(parser.root)
+        if node.tag == "li" and "changesinfo" in _class_value(node)
+    ]
+    page_text = _plain(html)
+    if not rows:
+        if "אין אירועים" in page_text or re.search(r"class=[\"'][^\"']*EmptyList", html, re.IGNORECASE):
+            return EventSnapshot([], update_text, source_url)
+        raise ShahafSourceError("Shahaf events page has no recognized event list")
+
+    parsed: dict[tuple[object, ...], ShahafEvent] = {}
+    for row in rows:
+        metadata_text = row.text()
+        detail = re.sub(r"\s+", " ", _node_text(row)).strip()
+        title = _first_tag_value(row, "b")
+        date_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", metadata_text)
+        period_match = re.search(
+            r"משיעור\s*(\d+)\s*עד\s*שיעור\s*(\d+)", metadata_text, re.IGNORECASE
+        )
+        clock_match = re.search(
+            r"משעה\s*(\d{1,2}:\d{2})\s*עד\s*שעה\s*(\d{1,2}:\d{2})",
+            metadata_text,
+            re.IGNORECASE,
+        )
+        class_match = re.search(r"לכיתות:\s*(.*)$", metadata_text)
+        if not title or not date_match or not class_match or (not period_match and not clock_match):
+            raise ShahafSourceError(f"Shahaf event row has unsupported format: {detail!r}")
+
+        event_date = date(int(date_match.group(3)), int(date_match.group(2)), int(date_match.group(1)))
+        start_period = end_period = None
+        start_clock = end_clock = None
+        if period_match:
+            start_period, end_period = int(period_match.group(1)), int(period_match.group(2))
+            # Shahaf uses periods beyond the regular lesson grid for events
+            # such as parent meetings (for example 14–21). They are valid
+            # overlays, but can never suppress lesson periods 0–13.
+            if not (0 <= start_period <= end_period <= 99):
+                raise ShahafSourceError(f"Shahaf event row has invalid period range: {detail!r}")
+        else:
+            try:
+                start_clock = time.fromisoformat(clock_match.group(1))
+                end_clock = time.fromisoformat(clock_match.group(2))
+            except ValueError as exc:
+                raise ShahafSourceError(f"Shahaf event row has invalid clock range: {detail!r}") from exc
+            if start_clock >= end_clock:
+                raise ShahafSourceError(f"Shahaf event row has reversed clock range: {detail!r}")
+
+        scope = class_match.group(1).strip()
+        # Some live rows serialize the nested title after the class list in
+        # row.text(), even though it appears as a separate <b> element in the
+        # markup. Keep the public scope limited to the actual class selector.
+        if title and scope.endswith(title):
+            scope = scope[: -len(title)].rstrip(" ,:-")
+        class_numbers, all_classes = _event_class_scope(scope)
+        if not scope or (not class_numbers and not all_classes):
+            raise ShahafSourceError(f"Shahaf event row has no explicit grade-11 class scope: {detail!r}")
+        event = ShahafEvent(
+            date=event_date,
+            title=re.sub(r"\s+", " ", unescape(title)).strip(),
+            start_period=start_period,
+            end_period=end_period,
+            start=start_clock,
+            end=end_clock,
+            class_scope=scope,
+            detail=detail,
+            class_numbers=class_numbers,
+            all_classes=all_classes,
+        )
+        key = (
+            event.date,
+            event.title,
+            event.start_period,
+            event.end_period,
+            event.start,
+            event.end,
+            event.class_scope,
+        )
+        parsed[key] = event
+
+    return EventSnapshot(
+        sorted(parsed.values(), key=lambda item: (item.date, item.start_period if item.start_period is not None else 99, item.start or time.min, item.title)),
+        update_text,
+        source_url,
+    )
+
+
 def _class_number_includes(value: str, expected_class_number: int) -> bool:
     """Match Hebrew 11th-grade class lists, including compact ranges."""
     text = unescape(value).casefold().replace("\u00a0", " ")
+    if re.search(r"כל\s+הכיתות|all\s+classes", text, re.IGNORECASE):
+        return True
     numbers = {int(item) for item in re.findall(r"יא\s*[-–]?\s*(\d+)", text)}
     if expected_class_number in numbers:
         return True
@@ -448,6 +592,28 @@ def _exam_subject(title: str) -> str | None:
         ("תנ'ך", "תנ״ך"),
         ("דיפלומטיה", "דיפלומטיה"),
         ("סייבר", "סייבר — טלפונים חכמים"),
+    ):
+        if needle in normalized:
+            return subject
+    return None
+
+
+def _candidate_exam_subject(title: str) -> str | None:
+    """Map a visible exam title without discarding an unknown student's major."""
+    known = _exam_subject(title)
+    if known is not None:
+        return known
+    value = re.sub(r"^\s*מבחן(?:\s+פתיחת\s+שנה|\s+מעבר)?\s*(?:ב|ב-)?\s*", "", title).strip()
+    normalized = value.casefold().replace('"', "").replace("׳", "'")
+    for needle, subject in (
+        ("פיסיקה", "פיסיקה"),
+        ("ביולוגיה", "ביולוגיה"),
+        ("כימיה", "כימיה"),
+        ("מזרחנות", "מזרחנות"),
+        ("ערבית", "ערבית"),
+        ("אזרחות", "אזרחות"),
+        ("גיאוגרפיה", "גיאוגרפיה"),
+        ("מדעי החברה", "מדעי החברה"),
     ):
         if needle in normalized:
             return subject
@@ -505,8 +671,14 @@ def parse_exams_html(
     source_url: str = "",
     expected_class_number: int = 2,
     expected_class_id: str = "11",
+    include_all: bool = False,
 ) -> ExamSnapshot:
-    """Parse Shahaf's class-filtered exam list into personal exam records."""
+    """Parse Shahaf's class-filtered exam list into exam candidates.
+
+    The legacy default keeps the older personal-track filtering behavior. The
+    sync pipeline uses ``include_all`` so it can select the right candidate
+    separately for every student's actual subject/teacher/room combination.
+    """
     parser = _TreeParser()
     try:
         parser.feed(html)
@@ -563,7 +735,7 @@ def parse_exams_html(
             raise ShahafSourceError(f"Shahaf exam row has unsupported format: {text!r}")
         if not _class_number_includes(class_match.group(1), expected_class_number):
             continue
-        subject = _exam_subject(title)
+        subject = _candidate_exam_subject(title) if include_all else _exam_subject(title)
         if subject is None:
             continue
         exam_date = date(int(date_match.group(3)), int(date_match.group(2)), int(date_match.group(1)))
@@ -572,10 +744,27 @@ def parse_exams_html(
             raise ShahafSourceError(f"Shahaf exam row has invalid period range: {text!r}")
         group_match = re.search(r"בקבוצה\s+של\s+(.+)$", metadata_text)
         group = group_match.group(1).strip() if group_match else ""
-        if not _exam_belongs_to_personal_track(subject, title, group):
+        room_match = re.search(r"^(.*?),\s*חדר:\s*(.+)$", group)
+        teacher = room_match.group(1).strip() if room_match else group
+        room = room_match.group(2).strip() if room_match else ""
+        if not include_all and not _exam_belongs_to_personal_track(subject, title, group):
             continue
-        key = (exam_date, subject, start_period, end_period)
-        exams.setdefault(key, Exam(exam_date, subject, start_period, end_period, text, group))
+        key = (exam_date, subject, start_period, end_period, teacher, room, title)
+        exams.setdefault(
+            key,
+            Exam(
+                exam_date,
+                subject,
+                start_period,
+                end_period,
+                text,
+                group,
+                title,
+                class_match.group(1).strip(),
+                teacher,
+                room,
+            ),
+        )
 
     return ExamSnapshot(sorted(exams.values(), key=lambda item: (item.date, item.start_period, item.subject)), update_text, source_url)
 
@@ -585,6 +774,7 @@ def merge_snapshots(snapshots: list[SourceSnapshot]) -> SourceSnapshot:
         raise ShahafSourceError("No usable Shahaf timetable pages were fetched")
     unique_lessons: dict[tuple[date, int, str, str, str], Lesson] = {}
     unique_changes: dict[tuple[object, ...], PublishedChange] = {}
+    unique_events: dict[tuple[object, ...], ShahafEvent] = {}
     for snapshot in snapshots:
         for item in snapshot.lessons:
             unique_lessons[(item.date, item.period, item.subject, item.teacher, item.room)] = item
@@ -602,10 +792,23 @@ def merge_snapshots(snapshots: list[SourceSnapshot]) -> SourceSnapshot:
                     item.room,
                 )
             ] = item
+        for item in snapshot.events:
+            unique_events[
+                (
+                    item.date,
+                    item.title,
+                    item.start_period,
+                    item.end_period,
+                    item.start,
+                    item.end,
+                    item.class_scope,
+                )
+            ] = item
     return SourceSnapshot(
         lessons=list(unique_lessons.values()),
         covered_dates=set().union(*(item.covered_dates for item in snapshots)),
         update_text=max(item.update_text for item in snapshots),
         source_url=snapshots[-1].source_url,
         changes=list(unique_changes.values()),
+        events=list(unique_events.values()),
     )

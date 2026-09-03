@@ -59,6 +59,33 @@ class NimTests(unittest.TestCase):
         with self.assertRaises(NimError):
             NimSafetyClient("nvapi-test", transport=transport).classify({})
 
+    def test_event_classifier_requires_conservative_schema_and_high_reasoning(self) -> None:
+        seen: list[Request] = []
+        client = NimSafetyClient(
+            "nvapi-test",
+            transport=self.response_transport(
+                '{"classification":"remote_learning","safe_to_delete_alarm":true,"risk_level":"low","reason":"No in-person attendance."}',
+                seen,
+            ),
+        )
+        decision = client.classify_event({"event": {"title": "יום למידה א-סינכרוני"}})
+        self.assertEqual(decision.classification, "remote_learning")
+        self.assertTrue(decision.safe_to_delete_alarm)
+        body = json.loads(seen[0].data.decode())
+        self.assertEqual(body["reasoning_effort"], "high")
+        self.assertIn("Never guess", body["messages"][0]["content"])
+
+    def test_event_classifier_rejects_unsafe_approval(self) -> None:
+        client = NimSafetyClient(
+            "nvapi-test",
+            transport=self.response_transport(
+                '{"classification":"normal_school","safe_to_delete_alarm":true,"risk_level":"low","reason":"unsafe"}',
+                [],
+            ),
+        )
+        with self.assertRaises(NimError):
+            client.classify_event({})
+
 
 if __name__ == "__main__":
     unittest.main()

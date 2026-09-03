@@ -235,6 +235,12 @@ class IcsEvent:
             dates.update(parse_datetime(item) for item in value.split(",") if item)
         return dates
 
+    def event_exdates(self) -> set[datetime]:
+        dates: set[datetime] = set()
+        for _params, value in self.get_all("X-SHAHAF-EVENT-EXDATE"):
+            dates.update(parse_datetime(item) for item in value.split(",") if item)
+        return dates
+
     def add_exdate(self, occurrence: datetime, automatic: bool = True) -> None:
         all_dates = self.exdates()
         all_dates.add(occurrence)
@@ -265,7 +271,51 @@ class IcsEvent:
             )
         else:
             self._remove("X-SHAHAF-AUTO-EXDATE")
-        remaining = self.exdates() - {occurrence}
+        # A school-event exclusion can coexist with a normal published
+        # cancellation for the same occurrence. Keep the exclusion until both
+        # owners have removed it.
+        remaining = self.exdates() if occurrence in self.event_exdates() else self.exdates() - {occurrence}
+        if remaining:
+            self._set(
+                "EXDATE",
+                ",".join(format_datetime(item) for item in sorted(remaining)),
+                {"TZID": "Asia/Jerusalem"},
+            )
+        else:
+            self._remove("EXDATE")
+
+    def add_event_exdate(self, occurrence: datetime) -> None:
+        event_dates = self.event_exdates()
+        if occurrence in event_dates:
+            return
+        all_dates = self.exdates()
+        all_dates.add(occurrence)
+        self._set(
+            "EXDATE",
+            ",".join(format_datetime(item) for item in sorted(all_dates)),
+            {"TZID": "Asia/Jerusalem"},
+        )
+        event_dates.add(occurrence)
+        self._set(
+            "X-SHAHAF-EVENT-EXDATE",
+            ",".join(format_datetime(item) for item in sorted(event_dates)),
+            {"TZID": "Asia/Jerusalem"},
+        )
+
+    def remove_event_exdate(self, occurrence: datetime) -> None:
+        event_dates = self.event_exdates()
+        if occurrence not in event_dates:
+            return
+        event_dates.remove(occurrence)
+        if event_dates:
+            self._set(
+                "X-SHAHAF-EVENT-EXDATE",
+                ",".join(format_datetime(item) for item in sorted(event_dates)),
+                {"TZID": "Asia/Jerusalem"},
+            )
+        else:
+            self._remove("X-SHAHAF-EVENT-EXDATE")
+        remaining = self.exdates() if occurrence in self.auto_exdates() else self.exdates() - {occurrence}
         if remaining:
             self._set(
                 "EXDATE",
@@ -308,7 +358,7 @@ class IcsEvent:
             line
             for line in self.lines
             if _parse_property(line)[0]
-            not in {"RRULE", "EXDATE", "X-SHAHAF-AUTO-EXDATE", "RECURRENCE-ID"}
+            not in {"RRULE", "EXDATE", "X-SHAHAF-AUTO-EXDATE", "X-SHAHAF-EVENT-EXDATE", "RECURRENCE-ID"}
         ]
         override = IcsEvent(lines)
         override._set("DTSTART", format_datetime(new_start), {"TZID": "Asia/Jerusalem"})
@@ -384,6 +434,7 @@ class Calendar:
         summary: str,
         description: str,
         location: str,
+        properties: dict[str, str] | None = None,
     ) -> IcsEvent:
         existing = next((event for event in self.events if event.uid == uid), None)
         lines = [
@@ -397,7 +448,10 @@ class Calendar:
         ]
         if location:
             lines.append(f"LOCATION:{_escape(location)}")
-        lines.extend(["STATUS:CONFIRMED", "TRANSP:OPAQUE", "X-SHAHAF-AUTO:1", "END:VEVENT"])
+        lines.extend(["STATUS:CONFIRMED", "TRANSP:OPAQUE", "X-SHAHAF-AUTO:1"])
+        for name, value in sorted((properties or {}).items()):
+            lines.append(f"{name.upper()}:{_escape(str(value))}")
+        lines.append("END:VEVENT")
         generated = IcsEvent(lines)
         if existing is None:
             self.events.append(generated)

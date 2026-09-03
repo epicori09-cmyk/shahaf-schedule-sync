@@ -10,6 +10,26 @@ If a value is not visible, return null and add a warning. If a period is not vis
 
 Return exactly one valid JSON object. Do not use Markdown, explanations, comments, or code fences.
 
+CRITICAL JSON STRING ESCAPING
+
+This output is imported by a strict JSON parser. Construct the complete object internally and serialize it with a strict JSON serializer equivalent to JavaScript `JSON.stringify`; do not manually compose JSON-like text.
+
+Inside JSON string values:
+
+- Escape every ASCII double quote inside Hebrew or mixed text as `\"`.
+- Escape every backslash as `\\`.
+- Escape newlines, tabs, and other control characters; never insert them literally.
+
+Correct examples:
+
+`"subject": "תנ\"ך"`
+`"room": "י\"א 2 - 217"`
+`"subject": "אנגלית מואץ 5 יח\"ל"`
+
+Never emit raw unescaped forms such as `"subject": "תנ"ך"`. The parsed value must preserve the original Hebrew text exactly.
+
+Before returning, strictly parse the entire serialized response using JSON.parse or an equivalent parser. If it fails, repair the escaping and re-check. Return nothing until the parse succeeds.
+
 Required JSON shape:
 {
   "schema_version": 1,

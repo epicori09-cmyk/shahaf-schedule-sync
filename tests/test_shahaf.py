@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 import unittest
 
-from shahaf_sync.shahaf import ShahafSourceError, parse_changes_html, parse_timetable_html
+from shahaf_sync.shahaf import ShahafSourceError, parse_changes_html, parse_events_html, parse_timetable_html
 
 
 HTML = """<!doctype html>
@@ -55,6 +55,19 @@ NEW_CHANGES_HTML = """<!doctype html>
 <select name="cls"><option value="17" selected="selected">י״א - 8</option></select>
 <div class="UpdateDate">מעודכן ל: 01.09.2026, שעה: 15:20</div>
 <ul><li class="ChangesInfo">01.09.2026, שיעור 1, מן שמרת, ביטול שעור</li></ul>
+</body></html>"""
+
+
+EVENTS_HTML = """<!doctype html>
+<html><body>
+<select name="cls"><option value="11" selected="selected">י״א - 2</option></select>
+<div class="UpdateDate">מעודכן ל: 03.09.2026, שעה: 11:04</div>
+<ul class="list-unstyled tt-changes-list mb-0">
+  <li class="ChangesInfo">07.09.2026, <b>טיול פתיחת שנה</b> משיעור 0 עד שיעור 14 לכיתות: יא-1...יא-9, יא-11, יא-12</li>
+  <li class="ChangesInfo">09.09.2026, <b>יום למידה א-סינכרוני</b> משיעור 0 עד שיעור 14 לכיתות: יא-1...יא-9, יא-11, יא-12</li>
+  <li class="ChangesInfo">10.09.2026, <b>חגיגות ראש השנה</b> משעה 12:50 עד שעה 13:00 לכיתות: כל הכיתות</li>
+  <li class="ChangesInfo">16.09.2026, <b>אסיפת הורים</b> משיעור 14 עד שיעור 21 לכיתות: יא-1...יא-9, יא-11, יא-12</li>
+</ul>
 </body></html>"""
 
 
@@ -122,6 +135,33 @@ class ShahafParserTests(unittest.TestCase):
         self.assertEqual(change.teacher, "מן שמרת")
         self.assertEqual(change.kind, "cancelled")
         self.assertEqual(change.subject, "")
+
+    def test_parses_events_period_clock_scope_and_post_school_periods(self) -> None:
+        snapshot = parse_events_html(EVENTS_HTML, reference_date=date(2026, 9, 4), expected_class_id="11")
+        self.assertEqual(snapshot.update_text, "מעודכן ל: 03.09.2026, שעה: 11:04")
+        self.assertEqual(len(snapshot.events), 4)
+        async_event = snapshot.events[1]
+        self.assertEqual(async_event.title, "יום למידה א-סינכרוני")
+        self.assertEqual(async_event.class_scope, "יא-1...יא-9, יא-11, יא-12")
+        self.assertEqual((async_event.start_period, async_event.end_period), (0, 14))
+        self.assertTrue(async_event.applies_to_class(2))
+        self.assertFalse(async_event.applies_to_class(10))
+        clock_event = snapshot.events[2]
+        self.assertEqual((clock_event.start.isoformat(), clock_event.end.isoformat()), ("12:50:00", "13:00:00"))
+        parent_meeting = snapshot.events[3]
+        self.assertEqual((parent_meeting.start_period, parent_meeting.end_period), (14, 21))
+
+    def test_empty_events_feed_is_safe(self) -> None:
+        empty = EVENTS_HTML[: EVENTS_HTML.index('<ul class="list-unstyled')]
+        empty += '<div class="EmptyList">אין אירועים</div></body></html>'
+        snapshot = parse_events_html(empty, reference_date=date(2026, 9, 4), expected_class_id="11")
+        self.assertEqual(snapshot.events, [])
+
+    def test_unknown_non_empty_events_markup_fails_closed(self) -> None:
+        unknown = EVENTS_HTML[: EVENTS_HTML.index('<ul class="list-unstyled')]
+        unknown += '<div class="UnexpectedEvent">09.09.2026 async</div></body></html>'
+        with self.assertRaises(ShahafSourceError):
+            parse_events_html(unknown, reference_date=date(2026, 9, 4), expected_class_id="11")
 
 
 if __name__ == "__main__":

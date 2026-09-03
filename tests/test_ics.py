@@ -61,6 +61,45 @@ class IcsTests(unittest.TestCase):
         self.assertEqual(rendered.count("20260927T083000"), 1)
         self.assertIn("EXDATE;TZID=Asia/Jerusalem:", rendered)
 
+    def test_event_exdate_is_separate_from_normal_cancellation(self) -> None:
+        calendar = parse_calendar(ICS)
+        event = calendar.events[0]
+        occurrence = datetime(2026, 9, 27, 8, 30)
+        event.add_exdate(occurrence)
+        event.add_event_exdate(occurrence)
+        self.assertIn(occurrence, event.auto_exdates())
+        self.assertIn(occurrence, event.event_exdates())
+        event.remove_auto_exdate(occurrence)
+        self.assertIn(occurrence, event.event_exdates())
+        self.assertIn(occurrence, event.exdates())
+        event.remove_event_exdate(occurrence)
+        self.assertNotIn(occurrence, event.event_exdates())
+        self.assertNotIn(occurrence, event.exdates())
+
+    def test_generated_event_is_deterministic_and_marked(self) -> None:
+        calendar = parse_calendar(ICS)
+        calendar.add_generated_event(
+            "event-test@example",
+            datetime(2026, 9, 9, 7, 45),
+            datetime(2026, 9, 9, 18, 20),
+            "יום למידה א-סינכרוני",
+            "no in-person attendance",
+            "",
+            properties={"X-SHAHAF-EVENT": "1"},
+        )
+        first = calendar.render()
+        calendar.add_generated_event(
+            "event-test@example",
+            datetime(2026, 9, 9, 7, 45),
+            datetime(2026, 9, 9, 18, 20),
+            "יום למידה א-סינכרוני",
+            "no in-person attendance",
+            "",
+            properties={"X-SHAHAF-EVENT": "1"},
+        )
+        self.assertEqual(calendar.render(), first)
+        self.assertIn("X-SHAHAF-EVENT:1", first)
+
     def test_add_recurrence_override_uses_same_uid(self) -> None:
         calendar = parse_calendar(ICS)
         base = calendar.events[0]

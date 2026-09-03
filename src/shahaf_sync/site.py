@@ -8,9 +8,89 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .ics import Calendar, IcsEvent
+from .events import event_is_past
 from .model import PERIOD_TIMES
 from .model import Exam
 from .reconcile import ChangeRecord
+
+
+PWA_ASSETS_DIR = Path(__file__).with_name("assets")
+
+
+def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bool) -> None:
+    """Give every rendered schedule page the same installable app identity."""
+    theme = "pink" if pink else "green"
+    icon_source = (PWA_ASSETS_DIR / f"icon-{theme}.svg").read_text(encoding="utf-8")
+    (output_dir / "icon.svg").write_text(icon_source, encoding="utf-8")
+    for size in (180, 192, 512):
+        source = PWA_ASSETS_DIR / f"icon-{theme}-{size}.png"
+        (output_dir / f"icon-{size}.png").write_bytes(source.read_bytes())
+
+    safe_profile_id = "".join(char if char.isalnum() else "-" for char in profile_id).strip("-")[:40] or "profile"
+    background = "#fff8fb" if pink else "#f4f6f3"
+    foreground = "#382633" if pink else "#142b35"
+    manifest = {
+        "name": title,
+        "short_name": "Shahaf",
+        "description": "A fast, installable Shahaf school schedule.",
+        "lang": "en",
+        "dir": "ltr",
+        "start_url": "./",
+        "scope": "./",
+        "display": "standalone",
+        "background_color": background,
+        "theme_color": foreground,
+        "icons": [
+            {"src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    }
+    (output_dir / "manifest.webmanifest").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    cache_name = f"shahaf-schedule-{safe_profile_id}-v1"
+    service_worker = f'''const CACHE_NAME = {json.dumps(cache_name)};
+const APP_SHELL = ["./", "./index.html", "./data.json", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
+
+self.addEventListener("install", (event) => {{
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
+  self.skipWaiting();
+}});
+
+self.addEventListener("activate", (event) => {{
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(
+      keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+    ))
+  );
+  self.clients.claim();
+}});
+
+self.addEventListener("fetch", (event) => {{
+  if (event.request.method !== "GET") return;
+  const request = event.request;
+  if (request.mode === "navigate") {{
+    event.respondWith(
+      Promise.race([
+        fetch(request).then((response) => {{
+          if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", response.clone()));
+          return response;
+        }}),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("network timeout")), 3500))
+      ]).catch(() => caches.match("./index.html"))
+    );
+    return;
+  }}
+  event.respondWith(caches.match(request).then((cached) => {{
+    if (cached) return cached;
+    return fetch(request).then((response) => {{
+      if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
+      return response;
+    }});
+  }}));
+}});
+'''
+    (output_dir / "sw.js").write_text(service_worker, encoding="utf-8")
 
 
 def _record_to_dict(record: ChangeRecord) -> dict[str, Any]:
@@ -45,6 +125,9 @@ def _exam_to_dict(exam: Exam) -> dict[str, Any]:
             "end_period": int(exam.get("end_period", 0)),
             "detail": str(exam.get("detail", "")),
             "group": str(exam.get("group", "")),
+            "title": str(exam.get("title", "")),
+            "teacher": str(exam.get("teacher", "")),
+            "room": str(exam.get("room", "")),
             "reminder_date": str(exam.get("reminder_date", "")) or reminder_date,
             "reminder_time": str(exam.get("reminder_time", "19:00")),
         }
@@ -55,6 +138,9 @@ def _exam_to_dict(exam: Exam) -> dict[str, Any]:
         "end_period": exam.end_period,
         "detail": exam.detail,
         "group": exam.group,
+        "title": exam.title,
+        "teacher": exam.teacher,
+        "room": exam.room,
         "reminder_date": (exam.date - timedelta(days=4)).isoformat(),
         "reminder_time": "19:00",
     }
@@ -153,6 +239,16 @@ def build_schedule(calendar: Calendar, start_date: str, end_date: str) -> list[d
         if event.recurrence_id is None or not (start <= event.start <= end):
             continue
         if event.period is None:
+            continue
+        base = next(
+            (
+                candidate
+                for candidate in calendar.events
+                if candidate.uid == event.uid and candidate.recurrence_id is None
+            ),
+            None,
+        )
+        if base is not None and event.recurrence_id in base.exdates():
             continue
         items.append(_schedule_item(event, event.start))
 
@@ -280,6 +376,10 @@ def render_site(
     error: str = "",
     schedule: list[dict[str, Any]] | None = None,
     exams: list[Exam] | None = None,
+    events: list[dict[str, Any]] | None = None,
+    events_available: bool = True,
+    events_error: str = "",
+    events_source_updated: str = "",
     now: datetime | None = None,
     alarm_safety: str | None = None,
     alarm_safety_reason: str = "",
@@ -292,10 +392,14 @@ def render_site(
     transit_wake: dict[str, Any] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    is_pink = profile_id == "ya1" or public_profile
+    _write_pwa_assets(output_dir, title, profile_id, pink=is_pink)
     schedule_data = schedule or []
     visible_changes = [item for item in changes if not _change_is_past(item, now)]
     periods = _period_metadata()
     exams_data = [_exam_to_dict(item) for item in (exams or [])]
+    events_data = list(events or [])
+    visible_events = [item for item in events_data if not event_is_past(item, now)]
     safe_transit_wake = dict(transit_wake) if transit_wake is not None else None
     if public_profile and safe_transit_wake is not None:
         for key in ("origin_address", "origin", "origin_coordinates"):
@@ -310,6 +414,10 @@ def render_site(
         "changes": [_record_to_dict(item) for item in changes],
         "exams": exams_data,
         "exams_available": exams is not None,
+        "events": visible_events,
+        "events_available": events_available,
+        "events_error": events_error,
+        "events_source_updated": events_source_updated,
         "source_url": source_url,
         "source_updated": source_updated,
         "last_successful_sync": last_successful_sync,
@@ -336,6 +444,10 @@ def render_site(
         "periods": periods,
         "exams": exams_data,
         "exams_available": exams is not None,
+        "events": visible_events,
+        "events_available": events_available,
+        "events_error": events_error,
+        "events_source_updated": events_source_updated,
     }
     if publish_wake:
         wake_data = build_wake_data(
@@ -381,9 +493,11 @@ def render_site(
     gate_script = '''<script>(()=>{const expected="אורי המלך";const body=document.body;const gate=document.getElementById("site-access-gate");const form=document.getElementById("gate-form");const input=document.getElementById("gate-phrase");const error=document.getElementById("gate-error");const unlock=()=>{body.classList.remove("site-locked");gate.hidden=true};form.addEventListener("submit",(event)=>{event.preventDefault();if(input.value.trim()===expected)unlock();else{error.textContent=document.documentElement.lang==="he"?"המשפט אינו נכון.":"That phrase is not correct.";input.select()}});input.focus()})();</script>''' if profile_id == "ya1" else ""
 
     exams_html = '''<section class="exams" id="exams-view" aria-labelledby="exams-title" hidden><div class="section-title"><h2 id="exams-title" data-i18n="exams">Exams</h2><span id="exams-count">0</span></div><div class="exam-list" id="exam-list"></div></section>'''
+    events_html = '''<section class="changes" id="events-view" aria-labelledby="events-title" hidden><div class="section-title"><h2 id="events-title" data-i18n="events">Events</h2><span id="events-count">0</span></div><p id="events-status" class="date-line"></p><div class="change-list" id="event-list"></div></section>'''
 
     schedule_json = json.dumps(schedule_data, ensure_ascii=False).replace("</", "<\\/")
     periods_json = json.dumps(periods, ensure_ascii=False)
+    events_json = json.dumps(visible_events, ensure_ascii=False).replace("</", "<\\/")
     primary_profile_json = json.dumps(primary_profile, ensure_ascii=False).replace("</", "<\\/")
     schedule_available = "true" if schedule is not None else "false"
     sync_display = _pretty_timestamp(last_successful_sync or generated_at)
@@ -392,7 +506,7 @@ def render_site(
     ui_translations = {
         "en": {
             "mySchedule": "My schedule", "openShahaf": "Open Shahaf", "scheduleViews": "Schedule views",
-            "now": "Now", "fullSchedule": "Full schedule", "exams": "Exams", "loadingToday": "Loading today’s schedule…",
+            "now": "Now", "fullSchedule": "Full schedule", "exams": "Exams", "events": "Events", "loadingToday": "Loading today’s schedule…",
             "todaysSchedule": "Today’s schedule", "checking": "Checking…", "nextUp": "Next up", "syncNeedsAttention": "Sync needs attention",
             "synced": "Synced", "errorDetails": "Error details", "busPlan": "Bus plan", "checkingRoute": "Checking the safest scheduled route…",
             "ready": "Ready", "leaveHome": "Leave home", "arriveBy": "arrive by", "earlierBuses": "Earlier buses were considered; this is the latest scheduled departure that still arrives safely.",
@@ -408,9 +522,10 @@ def render_site(
             "lessonSingular": "lesson", "scheduleUnavailable": "Schedule unavailable", "tryAgain": "Try again later", "timetableAfterSync": "The synced timetable will appear after the next successful sync",
             "noClassRightNow": "No class right now", "betweenLessons": "You’re between lessons", "noMoreLessons": "No more lessons", "allDone": "You’re all done for the synced schedule",
             "inPeriod": "You’re in Period", "nextLesson": "Next lesson", "noLessonsToday": "No lessons scheduled today", "nothingElse": "Nothing else is scheduled in the synced timetable",
+            "noUpcomingEvents": "No upcoming school events.", "eventOverlay": "Overlay · normal lessons remain", "eventNoSchool": "No school", "eventRemote": "Remote learning", "eventReview": "Needs review", "eventNormal": "Attendance event", "eventsUnavailable": "Events are unavailable; the timetable and alarm were left unchanged.",
         },
         "he": {
-            "mySchedule": "המערכת שלי", "openShahaf": "פתיחת שחף", "scheduleViews": "תצוגות מערכת", "now": "עכשיו", "fullSchedule": "מערכת מלאה", "exams": "מבחנים",
+            "mySchedule": "המערכת שלי", "openShahaf": "פתיחת שחף", "scheduleViews": "תצוגות מערכת", "now": "עכשיו", "fullSchedule": "מערכת מלאה", "exams": "מבחנים", "events": "אירועים",
             "loadingToday": "טוען את המערכת של היום…", "todaysSchedule": "המערכת של היום", "checking": "בודק…", "nextUp": "השיעור הבא", "syncNeedsAttention": "נדרשת תשומת לב לסנכרון",
             "synced": "מסונכרן", "errorDetails": "פרטי שגיאה", "busPlan": "תוכנית נסיעה", "checkingRoute": "בודק את המסלול המתוזמן הבטוח ביותר…", "ready": "מוכן",
             "leaveHome": "יציאה מהבית", "arriveBy": "הגעה עד", "earlierBuses": "נבדקו גם אוטובוסים מוקדמים יותר; זהו האוטובוס המאוחר ביותר שמגיע בזמן.", "verifyRoute": "בדיקת המסלול ב-Google Maps ↗",
@@ -422,6 +537,7 @@ def render_site(
             "freePeriod": "שעה פנויה", "nothingScheduled": "אין שיעור מתוכנן", "lesson": "שיעור", "room": "חדר", "gapsIncluded": "כולל הפסקות", "lessons": "שיעורים", "lessonSingular": "שיעור",
             "scheduleUnavailable": "המערכת אינה זמינה", "tryAgain": "נסה שוב מאוחר יותר", "timetableAfterSync": "המערכת תופיע לאחר סנכרון מוצלח הבא", "noClassRightNow": "אין שיעור עכשיו", "betweenLessons": "אתה בין שיעורים",
             "noMoreLessons": "אין עוד שיעורים", "allDone": "סיימת את המערכת להיום", "inPeriod": "אתה בשעה", "nextLesson": "השיעור הבא", "noLessonsToday": "אין שיעורים היום", "nothingElse": "אין שיעורים נוספים במערכת",
+            "noUpcomingEvents": "אין אירועי בית ספר קרובים.", "eventOverlay": "אירוע נלווה · השיעורים הרגילים נשארים", "eventNoSchool": "אין לימודים", "eventRemote": "למידה מרחוק", "eventReview": "דורש בדיקה", "eventNormal": "אירוע עם נוכחות", "eventsUnavailable": "האירועים אינם זמינים; המערכת וההתראה נשארו ללא שינוי.",
         },
     }
     ui_translations_json = json.dumps(ui_translations, ensure_ascii=False).replace("</", "<\\/")
@@ -436,8 +552,9 @@ def render_site(
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="My Schedule">
 <meta name="last-successful-sync" content="{escape(last_successful_sync or generated_at)}">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
 <link rel="manifest" href="./manifest.webmanifest">
-<link rel="apple-touch-icon" href="./icon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="./icon-180.png">
 <title>{escape(title)}</title>
 <style>
 :root{{color-scheme:light;--paper:#f4f6f3;--card:#ffffff;--ink:#142b35;--muted:#71818a;--line:#dfe7e4;--green:#0c806d;--green-soft:#d9f0e9;--red:#c85652;--red-soft:#fae6e4;--blue:#3869bd;--shadow:0 14px 35px #142b3512}}
@@ -445,7 +562,7 @@ def render_site(
 .app{{width:calc(100% - 28px);max-width:620px;margin:0 auto;padding:max(18px,env(safe-area-inset-top)) 0 34px;touch-action:pan-y}}
 .app{{contain:layout style}}body:not(.app-ready) #current-subject,body:not(.app-ready) #next-subject{{color:transparent;position:relative}}body:not(.app-ready) #current-subject::after,body:not(.app-ready) #next-subject::after{{content:"";display:block;width:68%;height:1em;border-radius:8px;background:linear-gradient(100deg,#ffffff14 20%,#ffffff32 38%,#ffffff14 56%);background-size:220% 100%;animation:skeleton-shimmer 1.25s linear infinite}}body:not(.app-ready) #next-subject::after{{width:78%;background:linear-gradient(100deg,#e4ecea 20%,#f7faf8 38%,#e4ecea 56%);background-size:220% 100%}}@keyframes skeleton-shimmer{{to{{background-position:-220% 0}}}}
 .topbar{{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}}.identity{{display:flex;align-items:center;gap:11px;color:var(--ink);text-decoration:none}}.mark{{display:grid;place-items:center;width:43px;height:43px;border-radius:14px;background:var(--ink);color:#fff;font-weight:800;font-size:14px;letter-spacing:-.05em}}.identity strong{{display:block;font-size:15px;letter-spacing:-.02em}}.identity small{{display:block;color:var(--muted);font-size:12px;margin-top:2px}}.source{{color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:50%;width:40px;height:40px;display:grid;place-items:center;font-size:19px;background:var(--card)}}
-.view-switch{{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;padding:4px;margin-bottom:27px;border:1px solid var(--line);border-radius:14px;background:#eaf0ed}}.view-switch button,.small-button,.day-chip{{font:inherit;border:0;cursor:pointer}}.view-switch button{{min-height:38px;border-radius:10px;background:transparent;color:var(--muted);font-size:13px;font-weight:750}}.view-switch button.is-active{{background:var(--card);color:var(--ink);box-shadow:0 2px 7px #142b3512}}button:focus-visible,.source:focus-visible,.identity:focus-visible{{outline:3px solid #8ecdc0;outline-offset:2px}}
+ .view-switch{{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;padding:4px;margin-bottom:27px;border:1px solid var(--line);border-radius:14px;background:#eaf0ed}}.view-switch button,.small-button,.day-chip{{font:inherit;border:0;cursor:pointer}}.view-switch button{{min-height:38px;border-radius:10px;background:transparent;color:var(--muted);font-size:13px;font-weight:750}}.view-switch button.is-active{{background:var(--card);color:var(--ink);box-shadow:0 2px 7px #142b3512}}button:focus-visible,.source:focus-visible,.identity:focus-visible{{outline:3px solid #8ecdc0;outline-offset:2px}}
 .status{{display:flex;align-items:center;gap:7px;color:var(--green);font-size:12px;font-weight:750;margin-bottom:11px}}.status-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px var(--green-soft)}}.stale{{color:#9b5b22}}.stale .status-dot{{background:#d18b3e;box-shadow:0 0 0 4px #f7e6ca}}.error{{margin:-2px 0 18px;color:#9b413a;font-size:12px}}.error summary{{cursor:pointer;font-weight:700}}.error pre{{white-space:pre-wrap;background:var(--red-soft);border-radius:10px;padding:10px;margin-top:8px}}
 .date-line{{color:var(--muted);font-size:14px;margin:0 0 5px}}h1,h2,h3,p{{margin-top:0}}h1{{font-size:clamp(35px,10vw,52px);line-height:1.02;letter-spacing:-.065em;margin:0 0 22px;font-weight:800}}.live-area{{margin-bottom:31px}}
 .lesson-card{{position:relative;overflow:hidden;border-radius:22px;background:var(--ink);color:#fff;padding:21px 21px 19px;min-height:185px;box-shadow:var(--shadow)}}.lesson-card::after{{content:"";position:absolute;width:175px;height:175px;border:1px solid #ffffff16;border-radius:50%;right:-65px;bottom:-115px;box-shadow:0 0 0 20px #ffffff08}}.lesson-kicker{{position:relative;z-index:1;color:#8fe1d4;font-size:11px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}}.lesson-card h2{{position:relative;z-index:1;font-size:29px;line-height:1.05;letter-spacing:-.05em;margin:25px 0 7px;max-width:88%}}.lesson-detail{{position:relative;z-index:1;margin:0;color:#b9c9cf;font-size:14px;min-height:20px}}.lesson-time{{position:relative;z-index:1;display:block;margin-top:22px;font-size:18px;font-weight:750;letter-spacing:-.03em}}.lesson-time small{{color:#adc0c8;font-size:13px;font-weight:500}}.lesson-card.is-empty{{background:#e4eceb;color:var(--ink);box-shadow:none}}.lesson-card.is-empty::after{{border-color:#ffffff55;box-shadow:0 0 0 20px #ffffff33}}.lesson-card.is-empty .lesson-kicker{{color:var(--muted)}}.lesson-card.is-empty .lesson-detail,.lesson-card.is-empty .lesson-time small{{color:var(--muted)}}
@@ -463,10 +580,11 @@ html[dir="rtl"] .identity,html[dir="rtl"] .source,html[dir="rtl"] .view-switch,h
 {gate_css}
 </style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}{gate_script}<main class="app">
 <header class="topbar"><a class="identity" href="."><span class="mark">{escape(profile_mark)}</span><span><strong>My schedule</strong><small>{escape(profile_label)}</small></span></a><a class="source" id="source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer" aria-label="Open Shahaf">↗</a></header>
-<nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Full schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
+ <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Full schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button><button id="events-tab" type="button" aria-selected="false">Events</button></nav>
 <section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p>{transit_html}</section>
 <section id="full-view" class="full-schedule" hidden aria-labelledby="full-title"><div class="schedule-heading"><div><p class="eyebrow">Every period</p><h2 id="full-title">Full schedule</h2></div><button id="back-to-now" class="small-button" type="button">Back to now</button></div><div id="day-picker" class="day-picker" role="listbox" aria-label="Choose a school day"></div><div class="selected-day"><div><h3 id="selected-day-title">Loading…</h3><p id="selected-day-summary"></p></div><button id="jump-today" class="small-button" type="button">Today</button></div><div id="schedule-periods" class="period-list"></div></section>
-{exams_html}
+ {exams_html}
+ {events_html}
 {changes_html}
 <footer class="footer"><span>Last successful sync: <span id="last-sync">{escape(sync_display)}</span></span><a id="footer-source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer">Open Shahaf ↗</a></footer>
 </main><script>
@@ -479,7 +597,7 @@ document.querySelectorAll("[data-i18n]").forEach((element) => {{ element.textCon
 setUiText(".identity strong", "mySchedule");
 const sourceLink = document.getElementById("source-link"); if (sourceLink) sourceLink.setAttribute("aria-label", tr("openShahaf"));
 const viewSwitch = document.querySelector(".view-switch"); if (viewSwitch) viewSwitch.setAttribute("aria-label", tr("scheduleViews"));
-setUiText("#now-tab", "now"); setUiText("#full-tab", "fullSchedule"); setUiText("#exams-tab", "exams");
+ setUiText("#now-tab", "now"); setUiText("#full-tab", "fullSchedule"); setUiText("#exams-tab", "exams"); setUiText("#events-tab", "events");
 setUiText("#today-label", "loadingToday"); setUiText("#today-title", "todaysSchedule");
 setUiText("#current-subject", "checking"); setUiText("#next-subject", "checking");
 const lessonKickers = document.querySelectorAll(".lesson-kicker"); if (lessonKickers[0]) lessonKickers[0].textContent = tr("now"); if (lessonKickers[1]) lessonKickers[1].textContent = tr("nextUp");
@@ -488,8 +606,9 @@ const dayPicker = document.getElementById("day-picker"); if (dayPicker) dayPicke
 const footerSource = document.getElementById("footer-source-link"); if (footerSource) {{ footerSource.textContent = tr("openShahaf") + " ↗"; footerSource.setAttribute("aria-label", tr("openShahaf")); }}
 const syncLabel = document.getElementById("last-sync"); if (syncLabel && syncLabel.previousSibling) syncLabel.previousSibling.textContent = " " + tr("lastSuccessfulSync") + " ";
 if (shahafIsHebrew) document.title = tr("mySchedule");
-const activeProfile = {primary_profile_json};
-const periods = {periods_json};
+ const activeProfile = {primary_profile_json};
+ const periods = {periods_json};
+ const initialEvents = {events_json};
 const scheduleZone = "Asia/Jerusalem";
 const dateFormatter = new Intl.DateTimeFormat(uiLocale, {{ weekday: "long", month: "long", day: "numeric", timeZone: scheduleZone }});
 const shortDateFormatter = new Intl.DateTimeFormat(uiLocale, {{ weekday: "short", month: "short", day: "numeric", timeZone: scheduleZone }});
@@ -497,7 +616,10 @@ const palette = ["#d16d8e", "#78c8cb", "#f0bd47", "#76c983", "#8796df", "#d88a54
 let schedule = activeProfile.schedule || [];
 let scheduleAvailable = Boolean(activeProfile.schedule_available);
 let changes = activeProfile.changes || [];
-let exams = activeProfile.exams || [];
+ let exams = activeProfile.exams || [];
+ let events = activeProfile.events || initialEvents || [];
+ const eventsAvailable = activeProfile.events_available !== false;
+ const eventsError = activeProfile.events_error || "";
 const transitWake = activeProfile.transit_wake || null;
 function nowInSchoolZone() {{ const parts = new Intl.DateTimeFormat("en-CA", {{ timeZone: scheduleZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }}).formatToParts(new Date()); const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value])); return {{ date: `${{values.year}}-${{values.month}}-${{values.day}}`, minutes: Number(values.hour) * 60 + Number(values.minute) }}; }}
 function minutes(value) {{ const [hour, minute] = value.split(":").map(Number); return hour * 60 + minute; }}
@@ -513,15 +635,21 @@ function renderDayPicker(selected) {{ const picker = document.getElementById("da
 function renderFullDay(targetDate) {{ const dates = scheduleDates(); if (!dates.length) {{ document.getElementById("schedule-periods").innerHTML = `<div class="empty-day">The full schedule will appear after a successful sync.</div>`; return; }} const selected = dates.includes(targetDate) ? targetDate : dates[0]; renderDayPicker(selected); const items = schedule.filter((item) => item.date === selected); const byPeriod = Object.fromEntries(items.map((item) => [item.period, item])); const day = schoolDate(selected); document.getElementById("selected-day-title").textContent = dateFormatter.format(day); document.getElementById("selected-day-summary").textContent = `${{items.length}} lesson${{items.length === 1 ? "" : "s"}} · gaps included`; document.getElementById("schedule-periods").innerHTML = periods.map((slot) => {{ const item = byPeriod[slot.period]; const accent = palette[slot.period % palette.length]; return `<article class="period-row ${{item ? "has-lesson" : "is-gap"}}" style="--slot-accent:${{accent}}"><div class="period-main">${{item ? `<strong>${{escapeHtml(item.subject)}}</strong><span>${{escapeHtml([item.teacher, item.room ? `Room ${{item.room}}` : ""].filter(Boolean).join(" · ") || "Lesson")}}</span>` : `<span class="gap-label">Free period</span><span class="gap-sub">Nothing scheduled</span>`}}</div><div class="period-info"><strong>${{slot.period}}</strong><span>${{formatTime(slot.start)}}<br>– ${{formatTime(slot.end)}}</span></div></article>`; }}).join(""); }}
 function changeIsPast(change) {{ const now = nowInSchoolZone(); if (change.date < now.date) return true; if (change.date > now.date) return false; const slot = periods.find((item) => item.period === Number(change.period)); return slot ? now.minutes >= minutes(slot.end) : false; }}
 function renderChanges() {{ const list = document.getElementById("change-list"); const count = document.getElementById("changes-count"); const visible = changes.filter((item) => !changeIsPast(item)); count.textContent = String(visible.length); if (!visible.length) {{ list.innerHTML = `<div class="quiet">No upcoming cancellations or updates.</div>`; return; }} list.innerHTML = visible.map((item) => {{ const label = item.kind === "cancelled" ? "Cancelled" : item.kind === "added" ? "Added" : "Changed"; const subject = item.subject || "Schedule update"; return `<article class="change-row ${{escapeHtml(item.kind)}}"><div class="change-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Period ${{escapeHtml(item.period)}}</span></div><div class="change-body"><div><span class="change-label">${{label}}</span><h3>${{escapeHtml(subject)}}</h3></div><p>${{escapeHtml(item.detail || "Schedule update")}}</p></div></article>`; }}).join(""); }}
-function renderExams() {{ const list = document.getElementById("exam-list"); const count = document.getElementById("exams-count"); count.textContent = String(exams.length); if (!exams.length) {{ list.innerHTML = `<div class="quiet">No upcoming exams found for this profile.</div>`; return; }} list.innerHTML = exams.map((item) => {{ let periodText = String(item.start_period); if (item.end_period !== item.start_period) periodText += `–${{item.end_period}}`; return `<article class="exam-row"><div class="exam-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Periods ${{escapeHtml(periodText)}}</span></div><div class="exam-body"><h3>${{escapeHtml(item.subject)}}</h3><p>Reminder: 4 days before · 7:00 PM</p></div></article>`; }}).join(""); }}
-function setView(view) {{ const full = view === "full"; const examsView = view === "exams"; document.getElementById("now-view").hidden = full || examsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("changes-view").hidden = full || examsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} window.scrollTo({{top: 0, behavior: "smooth"}}); }}
+ function renderExams() {{ const list = document.getElementById("exam-list"); const count = document.getElementById("exams-count"); count.textContent = String(exams.length); if (!exams.length) {{ list.innerHTML = `<div class="quiet">No upcoming exams found for this profile.</div>`; return; }} list.innerHTML = exams.map((item) => {{ let periodText = String(item.start_period); if (item.end_period !== item.start_period) periodText += `–${{item.end_period}}`; return `<article class="exam-row"><div class="exam-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Periods ${{escapeHtml(periodText)}}</span></div><div class="exam-body"><h3>${{escapeHtml(item.subject)}}</h3><p>Reminder: 4 days before · 7:00 PM</p></div></article>`; }}).join(""); }}
+ function eventIsPast(item) {{ const now = nowInSchoolZone(); if (item.date < now.date) return true; if (item.date > now.date) return false; if (item.end) return now.minutes >= minutes(item.end); if (item.end_period !== null && item.end_period !== undefined) {{ const slot = periods.find((period) => period.period === Math.min(Number(item.end_period), 13)); return slot ? now.minutes >= minutes(slot.end) : false; }} return false; }}
+ function eventLabel(item) {{ return item.classification === "no_school" ? "No school" : item.classification === "remote_learning" ? "Remote learning" : item.classification === "uncertain" ? "Needs review" : item.classification === "normal_school" ? "Attendance event" : "Overlay"; }}
+ function renderEvents() {{ const list = document.getElementById("event-list"); const count = document.getElementById("events-count"); const status = document.getElementById("events-status"); if (!list || !count || !status) return; const visible = events.filter((item) => !eventIsPast(item)); count.textContent = String(visible.length); status.textContent = eventsAvailable ? "" : "Events are unavailable; the timetable and alarm were left unchanged."; if (!visible.length) {{ list.innerHTML = `<div class="quiet">No upcoming school events.</div>`; return; }} list.innerHTML = visible.map((item) => {{ const classification = item.classification || "overlay"; const range = item.start ? `${{formatTime(item.start)}}–${{formatTime(item.end)}}` : item.start_period !== null && item.start_period !== undefined ? `Period ${{item.start_period}}–${{item.end_period}}` : ""; const detailText = item.decision_reason || item.detail || "School event"; return `<article class="change-row event-row ${{escapeHtml(classification)}}"><div class="change-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>${{escapeHtml(range)}}</span></div><div class="change-body event-body"><div><span class="change-label event-label">${{escapeHtml(eventLabel(item))}}</span><h3>${{escapeHtml(item.title)}}</h3></div><p>${{escapeHtml(detailText)}}</p></div></article>`; }}).join(""); }}
+ function setView(view) {{ const full = view === "full"; const examsView = view === "exams"; const eventsView = view === "events"; document.getElementById("now-view").hidden = full || examsView || eventsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("events-view").hidden = !eventsView; document.getElementById("changes-view").hidden = full || examsView || eventsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("events-tab").classList.toggle("is-active", eventsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); document.getElementById("events-tab").setAttribute("aria-selected", String(eventsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} if (eventsView) renderEvents(); window.scrollTo({{top: 0, behavior: "smooth"}}); }}
 function localizeRenderedUi() {{
   document.querySelectorAll("#change-list .change-label").forEach((element) => {{ element.textContent = element.textContent === "Cancelled" ? tr("cancelled") : element.textContent === "Added" ? tr("added") : tr("changed"); }});
   document.querySelectorAll("#change-list h3").forEach((element) => {{ if (element.textContent === "Schedule update") element.textContent = tr("scheduleUpdate"); }});
   document.querySelectorAll("#change-list .change-date span").forEach((element) => {{ element.textContent = element.textContent.replace(/^Period /, tr("period") + " "); }});
   document.querySelectorAll("#exam-list .exam-date span").forEach((element) => {{ element.textContent = element.textContent.replace(/^Periods? /, tr("periods") + " "); }});
   document.querySelectorAll("#change-list .quiet").forEach((element) => {{ element.textContent = tr("noUpcomingChanges"); }});
-  document.querySelectorAll("#exam-list .quiet").forEach((element) => {{ element.textContent = tr("noUpcomingExams"); }});
+   document.querySelectorAll("#exam-list .quiet").forEach((element) => {{ element.textContent = tr("noUpcomingExams"); }});
+   document.querySelectorAll("#event-list .quiet").forEach((element) => {{ element.textContent = tr("noUpcomingEvents"); }});
+   document.querySelectorAll("#event-list .event-label").forEach((element) => {{ const value = element.textContent; element.textContent = value === "No school" ? tr("eventNoSchool") : value === "Remote learning" ? tr("eventRemote") : value === "Needs review" ? tr("eventReview") : value === "Attendance event" ? tr("eventNormal") : tr("eventOverlay"); }});
+   const eventStatus = document.getElementById("events-status"); if (eventStatus && !eventsAvailable) eventStatus.textContent = tr("eventsUnavailable");
   document.querySelectorAll("#exam-list .exam-body p").forEach((element) => {{ element.textContent = tr("reminder"); }});
   document.querySelectorAll("#schedule-periods .gap-label").forEach((element) => {{ element.textContent = tr("freePeriod"); }});
   document.querySelectorAll("#schedule-periods .gap-sub").forEach((element) => {{ element.textContent = tr("nothingScheduled"); }});
@@ -542,10 +670,11 @@ function localizeRenderedUi() {{
 const localizeLiveState = () => {{ const current = document.getElementById("current-subject"); const currentDetail = document.getElementById("current-detail"); const next = document.getElementById("next-subject"); const nextDetail = document.getElementById("next-detail"); const note = document.getElementById("schedule-note"); if (current) {{ if (current.textContent === "Schedule unavailable") current.textContent = tr("scheduleUnavailable"); else if (current.textContent === "No class right now") current.textContent = tr("noClassRightNow"); }} if (currentDetail) {{ if (currentDetail.textContent === "The synced timetable is not available yet") currentDetail.textContent = tr("timetableAfterSync"); else if (currentDetail.textContent === "You’re between lessons") currentDetail.textContent = tr("betweenLessons"); else if (currentDetail.textContent === "No lessons scheduled today") currentDetail.textContent = tr("noLessonsToday"); }} if (next) {{ if (next.textContent === "Try again later") next.textContent = tr("tryAgain"); else if (next.textContent === "No more lessons") next.textContent = tr("noMoreLessons"); }} if (nextDetail && nextDetail.textContent === "Nothing else is scheduled in the synced timetable") nextDetail.textContent = tr("nothingElse"); if (note) {{ if (note.textContent.indexOf("You’re in Period ") === 0) note.textContent = tr("inPeriod") + " " + note.textContent.slice(17) + (shahafIsHebrew ? " עכשיו" : " now"); else if (note.textContent.indexOf("Next lesson: Period ") === 0) note.textContent = tr("nextLesson") + ": " + tr("period") + " " + note.textContent.slice(20); else if (note.textContent === "You’re all done for the synced schedule") note.textContent = tr("allDone"); }} }};
 const baseRenderChanges = renderChanges; renderChanges = () => {{ baseRenderChanges(); localizeRenderedUi(); }};
 const baseRenderExams = renderExams; renderExams = () => {{ baseRenderExams(); localizeRenderedUi(); }};
+const baseRenderEvents = renderEvents; renderEvents = () => {{ baseRenderEvents(); localizeRenderedUi(); }};
 const baseRenderFullDay = renderFullDay; renderFullDay = (targetDate) => {{ baseRenderFullDay(targetDate); const summary = document.getElementById("selected-day-summary"); if (summary) {{ const count = document.querySelectorAll("#schedule-periods .has-lesson").length; summary.textContent = count + " " + (count === 1 ? tr("lessonSingular") : tr("lessons")) + " · " + tr("gapsIncluded"); }} localizeRenderedUi(); }};
 const baseRefreshLiveLessons = refreshLiveLessons; refreshLiveLessons = () => {{ baseRefreshLiveLessons(); localizeLiveState(); }};
 const baseRenderTransitWake = renderTransitWake; renderTransitWake = () => {{ baseRenderTransitWake(); localizeRenderedUi(); }};
-document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => renderFullDay(nowInSchoolZone().date));
+ document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("events-tab").addEventListener("click", () => setView("events")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => renderFullDay(nowInSchoolZone().date));
 let swipeStart = null;
 const swipeSurface = document.querySelector(".app");
 swipeSurface.addEventListener("touchstart", (event) => {{
@@ -560,12 +689,13 @@ swipeSurface.addEventListener("touchend", (event) => {{
   const dy = touch.clientY - swipeStart.y;
   swipeStart = null;
   if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
-  const views = ["now", "full", "exams"];
-  const currentView = document.getElementById("exams-view").hidden ? (document.getElementById("full-view").hidden ? "now" : "full") : "exams";
+   const legacyViews = ["now", "full", "exams"];
+   const views = ["now", "full", "exams", "events"];
+   const currentView = !document.getElementById("events-view").hidden ? "events" : document.getElementById("exams-view").hidden ? (document.getElementById("full-view").hidden ? "now" : "full") : "exams";
   const nextIndex = views.indexOf(currentView) + (dx < 0 ? 1 : -1);
   if (nextIndex >= 0 && nextIndex < views.length) setView(views[nextIndex]);
 }}, {{ passive: true }});
-renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+ renderChanges(); renderExams(); renderEvents(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); renderEvents(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 </script></body></html>
 '''
     (output_dir / "index.html").write_text(html, encoding="utf-8")

@@ -150,6 +150,29 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertIn("CACHE_NAME = \"shahaf-schedule-v3\"", service_worker)
         self.assertIn("cache.put(request, response.clone())", service_worker)
 
+    def test_every_rendered_page_has_installable_pwa_branding(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(
+                output,
+                title="Student schedule",
+                generated_at="2026-09-04T06:30:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                profile_id="student-profile",
+                public_profile=True,
+            )
+            html = (output / "index.html").read_text(encoding="utf-8")
+            manifest = json.loads((output / "manifest.webmanifest").read_text(encoding="utf-8"))
+            self.assertIn('rel="icon" href="./icon.svg"', html)
+            self.assertIn('sizes="180x180"', html)
+            self.assertEqual([item["sizes"] for item in manifest["icons"]], ["192x192", "512x512"])
+            self.assertTrue((output / "sw.js").exists())
+            for size in (180, 192, 512):
+                self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:
         with TemporaryDirectory() as directory:
             render_site(
@@ -168,6 +191,41 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("4 days before", html)
             self.assertEqual(data["exams"][0]["reminder_date"], "2026-09-02")
             self.assertTrue(data["exams_available"])
+
+    def test_site_has_event_view_and_filters_finished_events(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-09T10:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                events=[
+                    {
+                        "date": "2026-09-09",
+                        "title": "יום למידה א-סינכרוני",
+                        "start_period": 0,
+                        "end_period": 14,
+                        "classification": "remote_learning",
+                        "detail": "No in-person attendance",
+                    },
+                    {
+                        "date": "2026-09-09",
+                        "title": "Finished",
+                        "start": "08:00",
+                        "end": "09:00",
+                        "classification": "overlay",
+                    },
+                ],
+                now=datetime(2026, 9, 9, 10, 0, tzinfo=timezone(timedelta(hours=3))),
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertIn("Events", html)
+            self.assertIn("יום למידה א-סינכרוני", html)
+            self.assertEqual([item["title"] for item in data["events"]], ["יום למידה א-סינכרוני"])
 
     def test_site_can_render_ya1_as_an_isolated_pink_page_without_wake(self) -> None:
         with TemporaryDirectory() as directory:

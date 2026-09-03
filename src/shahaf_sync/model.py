@@ -59,11 +59,45 @@ class Exam:
     end_period: int
     detail: str = ""
     group: str = ""
+    title: str = ""
+    class_scope: str = ""
+    teacher: str = ""
+    room: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ExamSnapshot:
     exams: list[Exam]
+    update_text: str
+    source_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class ShahafEvent:
+    """One date-scoped event published by Shahaf.
+
+    Shahaf uses period 14 as the end sentinel for an all-day school event,
+    while lessons themselves only occupy periods 0 through 13.
+    """
+
+    date: date
+    title: str
+    start_period: int | None = None
+    end_period: int | None = None
+    start: time | None = None
+    end: time | None = None
+    class_scope: str = ""
+    detail: str = ""
+    class_numbers: tuple[int, ...] = ()
+    all_classes: bool = False
+
+    def applies_to_class(self, class_number: int) -> bool:
+        return self.all_classes or class_number in self.class_numbers
+
+
+@dataclass(frozen=True, slots=True)
+class EventSnapshot:
+    events: list[ShahafEvent]
     update_text: str
     source_url: str
 
@@ -75,3 +109,4 @@ class SourceSnapshot:
     update_text: str
     source_url: str
     changes: list[PublishedChange] = field(default_factory=list)
+    events: list[ShahafEvent] = field(default_factory=list)

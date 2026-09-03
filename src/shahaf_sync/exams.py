@@ -16,7 +16,14 @@ EXAM_REMINDER_TIME = time(19, 0)
 
 def _exam_uid(exam: Exam) -> str:
     material = "|".join(
-        (exam.date.isoformat(), subject_key(exam.subject), str(exam.start_period), str(exam.end_period))
+        (
+            exam.date.isoformat(),
+            subject_key(exam.subject),
+            str(exam.start_period),
+            str(exam.end_period),
+            exam.teacher or exam.group,
+            exam.room,
+        )
     )
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
     return f"exam-{digest}@ostrovsky.shahaf-sync"
@@ -30,6 +37,10 @@ def _exam_event(exam: Exam) -> IcsEvent:
     reminder = datetime.combine(exam.date - timedelta(days=EXAM_REMINDER_DAYS), EXAM_REMINDER_TIME)
     summary = f"מבחן — {exam.subject}"
     detail = exam.detail or f"{exam.subject}, שיעורים {exam.start_period}–{exam.end_period}"
+    if exam.teacher and exam.teacher not in detail:
+        detail += f"\nקבוצה: {exam.teacher}"
+    if exam.room and exam.room not in detail:
+        detail += f"\nחדר: {exam.room}"
     lines = [
         "BEGIN:VEVENT",
         f"UID:{_exam_uid(exam)}",
@@ -73,4 +84,3 @@ def reconcile_exam_events(calendar: Calendar, exams: list[Exam]) -> None:
         else:
             calendar.events[calendar.events.index(existing)] = generated
         calendar.dirty = True
-
