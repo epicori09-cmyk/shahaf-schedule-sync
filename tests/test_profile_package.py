@@ -68,6 +68,12 @@ class ProfilePackageTests(unittest.TestCase):
         with self.assertRaises(ProfilePackageError):
             validate_package(value)
 
+    def test_missing_room_is_allowed_when_the_screenshot_did_not_show_one(self) -> None:
+        value = package()
+        value["weekly_schedule"][1]["room"] = None
+        normalized = validate_package(value)
+        self.assertIsNone(normalized["weekly_schedule"][1]["room"])
+
 
 if __name__ == "__main__":
     unittest.main()

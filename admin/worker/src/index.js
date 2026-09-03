@@ -79,7 +79,8 @@ function validatePackage(input) {
     if (row.status === "unknown") errors.push(`${path} is unknown; fill it before publishing`);
     if (row.status === "lesson") {
       if (!row.start || !row.end) errors.push(`${path} lesson requires start and end`);
-      for (const field of ["subject", "teacher", "room"]) if (typeof row[field] !== "string" || !row[field]) errors.push(`${path} lesson requires ${field}`);
+      for (const field of ["subject", "teacher"]) if (typeof row[field] !== "string" || !row[field]) errors.push(`${path} lesson requires ${field}`);
+      if (row.room !== null && row.room !== undefined && (typeof row.room !== "string" || !row.room)) errors.push(`${path}.room must be a non-empty string or null`);
     }
     if (row.status === "gap" && ["subject", "teacher", "room"].some((field) => row[field] !== null && row[field] !== undefined)) errors.push(`${path} gap fields must be null`);
     normalizedRows.push({ weekday, period, start: row.start ?? null, end: row.end ?? null, subject: row.subject ?? null, teacher: row.teacher ?? null, room: row.room ?? null, status: row.status });

@@ -188,9 +188,11 @@ def validate_package(raw: Any) -> dict[str, Any]:
         elif status == "lesson":
             if not start or not end:
                 errors.append(f"{path} lesson requires start and end")
-            for field in ("subject", "teacher", "room"):
+            for field in ("subject", "teacher"):
                 if not values[field]:
                     errors.append(f"{path} lesson requires {field}; do not guess it")
+            if values["room"] == "":
+                errors.append(f"{path}.room must be a non-empty string or null")
         else:
             if any(values.values()):
                 errors.append(f"{path} gap must have null subject, teacher, and room")
