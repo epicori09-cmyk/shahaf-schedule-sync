@@ -66,9 +66,10 @@ the whole active profile bundle rather than creating one job per student.
 
 The dashboard also supports:
 
-- **Edit**: change the admin name, Shahaf class number, complete
-  `weekly_schedule` JSON, and optional private transit settings (enabled,
-  origin address, latitude, and longitude).
+- **Edit**: use the block editor to change weekdays and Period 0–13 cards,
+  including status, times, subject, teacher, and room. It also changes the
+  admin name, Shahaf class number, and optional private transit settings
+  (enabled, origin address, latitude, and longitude).
 - **Enable / Disable**: keep a profile recoverable in D1 while controlling
   whether it is included in the next public deployment.
 - **Publish now**: queue a manual Pages refresh without changing the profile.
