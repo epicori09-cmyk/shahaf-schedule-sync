@@ -36,12 +36,12 @@ The existing `GIST_TOKEN`, `NVIDIA_API_KEY`, and Alexa secrets are unchanged.
 ## Import flow
 
 Open the Worker URL, log in, paste the strict GPT JSON or load a `.json`
-file, enter the admin-only student name, choose the student's Shahaf class from
-the live class dropdown, enter the human class number, and choose **Validate and
-publish**. The dropdown looks up the internal Shahaf `cls` ID automatically, so
-you do not need to know or type that ID. The class-number field is required for
-every import and overrides the value inside the GPT package, so the student's
-changes and exams are fetched for the class number you confirmed.
+file, enter the admin-only student name, enter the visible יא class number, and
+choose **Validate and publish**. The Worker assumes יא and maps the number to
+Shahaf's internal `cls` ID automatically, so you do not need to know or type
+that ID. The class-number field is required for every import and overrides the
+value inside the GPT package, so the student's changes and exams are fetched for
+the class number you entered.
 The Worker rejects unknown rows, duplicate periods, invalid times, missing
 class identity, and incomplete represented weekdays. A valid import is
 idempotent for the same admin name, reactivates a disabled profile, and
