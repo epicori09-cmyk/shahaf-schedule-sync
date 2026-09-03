@@ -62,6 +62,24 @@ failed sync does not replace the last published student page. The workflow
 also continues to use its existing concurrency guard, and one run processes
 the whole active profile bundle rather than creating one job per student.
 
+## Profile management
+
+The dashboard also supports:
+
+- **Edit**: change the admin name, Shahaf class number, complete
+  `weekly_schedule` JSON, and optional private transit settings (enabled,
+  origin address, latitude, and longitude).
+- **Enable / Disable**: keep a profile recoverable in D1 while controlling
+  whether it is included in the next public deployment.
+- **Publish now**: queue a manual Pages refresh without changing the profile.
+- **Delete**: permanently remove a profile from D1 after an explicit browser
+  confirmation; its public page disappears on the next successful deployment.
+
+All mutating controls require the authenticated session and CSRF token. Manual
+schedule edits go through the same strict validation as imports, so malformed
+periods, unknown rows, duplicate periods, invalid times, and missing class
+identity cannot be published.
+
 ## Security boundary
 
 The public profile ID has 128 bits of randomness and is private by obscurity,

@@ -10,11 +10,11 @@ ROOT = Path(__file__).parents[1]
 class AdminContractTests(unittest.TestCase):
     def test_worker_has_private_routes_and_security_controls(self) -> None:
         source = (ROOT / "admin" / "worker" / "src" / "index.js").read_text(encoding="utf-8")
-        for route in ("/api/login", "/api/logout", "/api/session", "/api/profiles", "/api/profiles/import", "/internal/profiles", "const publish ="):
+        for route in ("/api/login", "/api/logout", "/api/session", "/api/profiles", "/api/profiles/import", "/enable$/", "/disable$/", "request.method === \"DELETE\"", "/internal/profiles", "const publish ="):
             self.assertIn(route, source)
-        for import_control in ("id=\"classNumber\"", "body.class_number", "shortcut_url", 'alarm_label: "Shahaf"', "Shortcut URL (paste into Get Contents of URL)"):
+        for import_control in ("id=\"classNumber\"", "id=\"editPayload\"", "id=\"editOriginAddress\"", "body.class_number", "shortcut_url", 'alarm_label: "Shahaf"', "Shortcut URL (paste into Get Contents of URL)"):
             self.assertIn(import_control, source)
-        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit"):
+        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "Permanently delete this profile", "Enable transit-based wake planning", "Publish now"):
             self.assertIn(control, source)
         self.assertIn("GITHUB_DISPATCH_TOKEN", source)
         self.assertNotIn("GIST_TOKEN", source)
