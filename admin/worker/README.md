@@ -51,7 +51,7 @@ The console displays:
 
 `https://<pages>/students/<random-id>/wake.json`
 
-and the alarm label `Shahaf Wake - <first-six-id-characters>`. The import
+and the alarm label `Shahaf`. The import
 result also labels the wake URL as the **Shortcut URL**; paste that exact URL
 into the student's `Get Contents of URL` action. Each profile therefore gets
 its own Shortcut endpoint and alarm label. Configure the reviewed Shortcut

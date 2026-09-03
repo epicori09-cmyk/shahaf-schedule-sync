@@ -147,7 +147,7 @@ function profileView(row, origin) {
     page_url: `${origin}/students/${row.public_id}/`,
     wake_url: wakeUrl,
     shortcut_url: wakeUrl,
-    alarm_label: `Shahaf Wake - ${row.public_id.slice(0, 6).toUpperCase()}`,
+    alarm_label: "Shahaf",
   };
 }
 
@@ -290,7 +290,7 @@ export default {
       const id = existing?.id || crypto.randomUUID(); const publicId = existing?.public_id || randomToken(16); const timestamp = now();
       await env.DB.prepare("INSERT INTO profiles(id, public_id, name, package_json, active, created_at, updated_at, last_publish_status) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?5, 'queued') ON CONFLICT(id) DO UPDATE SET package_json=excluded.package_json, active=1, updated_at=excluded.updated_at, last_publish_status='queued'").bind(id, publicId, name, JSON.stringify(checked.package), timestamp).run();
       try { await triggerPublish(env, id); } catch (error) { await env.DB.prepare("UPDATE profiles SET last_publish_status='publish_failed', updated_at=?1 WHERE id=?2").bind(now(), id).run(); return json({ error: `Profile saved but publish failed: ${error.message}` }, 502); }
-      const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, ""); const wakeUrl = `${origin}/students/${publicId}/wake.json`; return json({ id, public_id: publicId, page_url: `${origin}/students/${publicId}/`, wake_url: wakeUrl, shortcut_url: wakeUrl, alarm_label: `Shahaf Wake - ${publicId.slice(0, 6).toUpperCase()}`, warnings: checked.warnings || [], status: "queued" });
+      const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, ""); const wakeUrl = `${origin}/students/${publicId}/wake.json`; return json({ id, public_id: publicId, page_url: `${origin}/students/${publicId}/`, wake_url: wakeUrl, shortcut_url: wakeUrl, alarm_label: "Shahaf", warnings: checked.warnings || [], status: "queued" });
     }
     if (match && request.method === "PATCH") {
       const body = await request.json().catch(() => ({})); const checked = validatePackage(body.package); if (checked.errors) return json({ error: checked.errors.join("\n") }, 400);

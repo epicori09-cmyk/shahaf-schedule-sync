@@ -348,7 +348,7 @@ def render_site(
         )
         if public_profile:
             wake_data["profile_id"] = profile_id
-            wake_data["alarm_label"] = f"Shahaf Wake - {profile_id[:6].upper()}"
+            wake_data["alarm_label"] = "Shahaf"
         data["wake"] = wake_data
     if safe_transit_wake is not None:
         data["transit_wake"] = safe_transit_wake
