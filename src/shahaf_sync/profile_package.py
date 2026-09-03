@@ -139,6 +139,10 @@ def validate_package(raw: Any) -> dict[str, Any]:
     if not isinstance(exam_terms, list) or not all(isinstance(value, str) and value for value in exam_terms):
         errors.append("shahaf.exam_terms must be a list of non-empty strings")
         exam_terms = []
+    exam_exact_terms = shahaf.get("exam_exact_terms", [])
+    if not isinstance(exam_exact_terms, list) or not all(isinstance(value, str) and value for value in exam_exact_terms):
+        errors.append("shahaf.exam_exact_terms must be a list of non-empty strings")
+        exam_exact_terms = []
 
     rows = raw.get("weekly_schedule")
     if not isinstance(rows, list) or not rows:
@@ -252,6 +256,7 @@ def validate_package(raw: Any) -> dict[str, Any]:
             "shared_subjects": list(shared),
             "selectors": selectors,
             "exam_terms": list(exam_terms),
+            "exam_exact_terms": list(exam_exact_terms),
         },
         "weekly_schedule": normalized_rows,
         "transit": {
@@ -282,6 +287,7 @@ def package_to_spec(package: dict[str, Any], public_id: str) -> dict[str, Any]:
         "shared_subjects": shahaf["shared_subjects"],
         "selectors": shahaf["selectors"],
         "exam_terms": shahaf["exam_terms"],
+        "exam_exact_terms": shahaf["exam_exact_terms"],
         "transit": transit,
         "managed_profile": True,
     }

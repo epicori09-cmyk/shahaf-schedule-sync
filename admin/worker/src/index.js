@@ -157,7 +157,7 @@ function validatePackage(input) {
   return { package: {
     schema_version: 1,
     student: { name: typeof name === "string" && name.trim() ? name.trim() : null },
-    shahaf: { class_id: String(shahaf.class_id), class_number: Number(shahaf.class_number), shared_subjects: Array.isArray(shahaf.shared_subjects) ? shahaf.shared_subjects : [], selectors: Array.isArray(shahaf.selectors) ? shahaf.selectors : [], exam_terms: Array.isArray(shahaf.exam_terms) ? shahaf.exam_terms : [] },
+    shahaf: { class_id: String(shahaf.class_id), class_number: Number(shahaf.class_number), shared_subjects: Array.isArray(shahaf.shared_subjects) ? shahaf.shared_subjects : [], selectors: Array.isArray(shahaf.selectors) ? shahaf.selectors : [], exam_terms: Array.isArray(shahaf.exam_terms) ? shahaf.exam_terms : [], exam_exact_terms: Array.isArray(shahaf.exam_exact_terms) ? shahaf.exam_exact_terms : [] },
     weekly_schedule: normalizedRows,
     transit: { enabled: Boolean(input.transit.enabled), origin_address: input.transit.origin_address ?? null, origin_lat: input.transit.enabled ? Number(input.transit.origin_lat) : null, origin_lon: input.transit.enabled ? Number(input.transit.origin_lon) : null },
     extraction: { visible_weekdays: [...new Set(visible.map((value) => String(value).toLowerCase()))], visible_periods: input.extraction.visible_periods || {}, warnings: Array.isArray(input.extraction.warnings) ? input.extraction.warnings : [] },

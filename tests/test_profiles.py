@@ -58,6 +58,17 @@ class ProfileTests(unittest.TestCase):
         selected = select_exams(exams, SPEC)
         self.assertEqual([item.subject for item in selected], ["מדעי המחשב 2"])
 
+    def test_exact_exam_track_excludes_parallel_accelerated_exam(self) -> None:
+        exams = [
+            Exam(date(2026, 9, 6), "מתמטיקה 5 יח״ל", 4, 6, group="מתמטיקה 5 יח״ל"),
+            Exam(date(2026, 9, 7), "מתמטיקה 5 יח״ל מואץ", 4, 6, group="מתמטיקה 5 יח״ל מואץ"),
+        ]
+        selected = select_exams(
+            exams,
+            {"exam_terms": ["מתמטיקה 5 יח״ל"], "exam_exact_terms": ["מתמטיקה 5 יח״ל"]},
+        )
+        self.assertEqual([item.subject for item in selected], ["מתמטיקה 5 יח״ל"])
+
     def test_ya1_transcribed_baseline_keeps_the_supplied_periods_and_gaps(self) -> None:
         lessons = build_ya1_schedule(date(2026, 9, 6), date(2026, 9, 10))
         sunday = {(item.period, item.subject) for item in lessons if item.date == date(2026, 9, 6)}

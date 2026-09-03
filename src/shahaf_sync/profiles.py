@@ -154,10 +154,12 @@ def _change_times(change: PublishedChange) -> tuple[time, time]:
 
 def select_exams(exams: list[Exam], spec: dict[str, Any]) -> list[Exam]:
     terms = [_text(str(value)) for value in spec.get("exam_terms", [])]
+    exact_terms = {_text(str(value)) for value in spec.get("exam_exact_terms", [])}
     return [
         exam
         for exam in exams
-        if any(term and (term in _text(exam.subject) or term in _text(exam.group)) for term in terms)
+        if (not exact_terms or _text(exam.subject) in exact_terms)
+        and any(term and (term in _text(exam.subject) or term in _text(exam.group)) for term in terms)
     ]
 
 
