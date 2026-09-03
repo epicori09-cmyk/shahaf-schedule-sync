@@ -104,3 +104,20 @@ The Master יא-2 profile also publishes a safe wake payload at
 lesson, and the wake time 75 minutes earlier. Stale or unavailable data sets a
 fallback status and disables the payload so an iPhone Shortcut can leave the
 existing alarm unchanged. The complete setup is in [`SHORTCUT.md`](SHORTCUT.md).
+
+## Multi-student profile admin
+
+The repository now includes a private Cloudflare Worker + D1 operator console
+for screenshot-derived student profiles. Copy the strict extraction prompt
+from [`CUSTOM_GPT_PROMPT.txt`](CUSTOM_GPT_PROMPT.txt), then import the returned
+JSON through the Worker. Valid packages are automatically queued for the
+existing Pages workflow; unknown rows, incomplete weekdays, duplicate periods,
+missing class identity, and invalid times are rejected.
+
+Names and complete packages remain in D1. Public output is generated only at
+`/students/<random-id>/` and `/students/<random-id>/wake.json`; it contains no
+student name or home coordinates. The console also gives each student a
+unique alarm label. Deployment and secret setup are documented in
+[`admin/worker/README.md`](admin/worker/README.md). The Worker source is
+included but is not deployed until a Cloudflare account, D1 database, and the
+listed secrets are configured.

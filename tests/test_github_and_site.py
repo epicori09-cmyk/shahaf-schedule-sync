@@ -244,6 +244,34 @@ class GithubAndSiteTests(unittest.TestCase):
             master_html = (Path(directory) / "master" / "index.html").read_text(encoding="utf-8")
             self.assertNotIn("site-access-gate", master_html)
 
+    def test_managed_profile_site_is_noindex_and_does_not_leak_transit_origin(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Student schedule",
+                generated_at="2026-09-02T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[],
+                profile_id="A" * 22,
+                profile_label="Student schedule",
+                profile_mark="STUDENT",
+                public_profile=True,
+                transit_wake={
+                    "shortcut_action": "set",
+                    "route_departure": "07:00",
+                    "route_arrival": "08:00",
+                    "origin_address": "private home",
+                },
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertIn('name="robots" content="noindex,nofollow,noarchive"', html)
+            self.assertNotIn("private home", json.dumps(data, ensure_ascii=False))
+            self.assertIn("Student schedule", html)
+
     def test_site_publishes_only_the_ya1_transit_wake_endpoint(self) -> None:
         transit_wake = {
             "profile": "ya1",

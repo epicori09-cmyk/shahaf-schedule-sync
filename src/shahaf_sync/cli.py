@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,6 +17,7 @@ from .ics import CalendarFormatError, parse_calendar
 from .model import Lesson, SourceSnapshot
 from .nim import NimError, NimSafetyClient, context_for_alarm_review
 from .profiles import apply_changes, lesson_to_dict, select_changes, select_exams, select_lessons
+from .profile_package import ProfilePackageError, build_package_schedule, package_to_spec, validate_package
 from .reconcile import ChangeRecord, reconcile_calendar
 from .shahaf import ShahafSourceError, parse_changes_html, parse_exams_html, parse_timetable_html
 from .site import build_schedule, build_wake_data, render_site
@@ -269,6 +271,11 @@ def _build_public_profile(
     update_text = ""
     if spec.get("baseline") == "transcribed":
         selected_lessons = build_ya1_schedule(window_start, window_end)
+    elif spec.get("baseline") == "package":
+        package = spec.get("package")
+        if not isinstance(package, dict):
+            raise SyncFailure(f"Profile {profile_id} has no imported package")
+        selected_lessons = build_package_schedule(package, window_start, window_end)
     else:
         for week in range(4):
             suffix = f"&week={week}" if week else ""
@@ -294,7 +301,9 @@ def _build_public_profile(
     if not selected_lessons:
         raise SyncFailure(f"Profile {profile_id} has no selected lessons in the published window")
 
-    changes_snapshot, _ = fetch_source(config, current.date(), class_id=class_id)
+    changes_snapshot = spec.get("changes_snapshot")
+    if not hasattr(changes_snapshot, "changes"):
+        changes_snapshot, _ = fetch_source(config, current.date(), class_id=class_id)
     update_text = update_text or changes_snapshot.update_text
     selected_changes = [
         item
@@ -303,12 +312,14 @@ def _build_public_profile(
     ]
     selected_lessons = apply_changes(selected_lessons, selected_changes)
 
-    exams_snapshot = fetch_exams(
-        config,
-        current.date(),
-        class_id=class_id,
-        class_number=class_number,
-    )
+    exams_snapshot = spec.get("exams_snapshot")
+    if not hasattr(exams_snapshot, "exams"):
+        exams_snapshot = fetch_exams(
+            config,
+            current.date(),
+            class_id=class_id,
+            class_number=class_number,
+        )
     exams = select_exams(exams_snapshot.exams, spec)
     change_records = [
         ChangeRecord(
@@ -340,12 +351,57 @@ def _build_public_profile(
     }
 
 
-def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | None = None) -> list[ChangeRecord]:
+def _managed_specs(path: Path | None) -> list[dict[str, object]]:
+    if path is None or not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SyncFailure(f"Managed profile bundle is unreadable: {exc}") from exc
+    records = payload.get("profiles", payload) if isinstance(payload, dict) else payload
+    if not isinstance(records, list):
+        raise SyncFailure("Managed profile bundle must contain a profiles list")
+    result: list[dict[str, object]] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict) or not record.get("active", True):
+            continue
+        public_id = str(record.get("public_id", ""))
+        package = record.get("package")
+        if len(public_id) < 22 or not isinstance(package, dict):
+            raise SyncFailure(f"Managed profile {index} is missing public_id or package")
+        try:
+            normalized = validate_package(package)
+        except ProfilePackageError as exc:
+            raise SyncFailure(f"Managed profile {public_id} is invalid: {exc}") from exc
+        spec = package_to_spec(normalized, public_id)
+        spec["package"] = normalized
+        result.append(spec)
+    return result
+
+
+def execute(
+    root: Path,
+    config: Config,
+    dry_run: bool = False,
+    now: datetime | None = None,
+    managed_profiles_path: Path | None = None,
+) -> list[ChangeRecord]:
     current = now or _now(config)
     client = GistClient(token=os.environ.get("GIST_TOKEN"))
     site_path = _site_path(config, root)
     previous = _previous_site_state(site_path)
     ya1_site_path = site_path / "ya1"
+    managed_site_path = site_path / "students"
+    previous_managed: dict[str, dict[str, object]] = {}
+    if managed_site_path.exists():
+        for child in managed_site_path.iterdir():
+            if child.is_dir():
+                previous_managed[child.name] = _previous_site_state(child)
+    # This directory is generated exclusively from the private Worker bundle.
+    # Clearing this exact output root ensures disabled profiles disappear from
+    # the next Pages artifact without touching the legacy root or /ya1 page.
+    if managed_site_path.exists():
+        shutil.rmtree(managed_site_path)
     previous_ya1 = _previous_site_state(ya1_site_path)
     source_url = f"{config.source_base_url}?cls={config.class_id}&tab=changes"
     try:
@@ -381,13 +437,47 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             exams=exam_snapshot.exams,
             current=current,
         )
+        profile_specs = [dict(spec) for spec in config.additional_profiles]
+        try:
+            profile_specs.extend(_managed_specs(managed_profiles_path))
+        except SyncFailure as managed_exc:
+            # A private bundle problem is isolated to the additive feature;
+            # it must not make the established master or legacy Ya1 sync fail.
+            print(f"Managed profiles skipped: {managed_exc}")
         profile_views: list[dict[str, object]] = []
-        for spec in config.additional_profiles:
+        profile_specs_by_id: dict[str, dict[str, object]] = {}
+        changes_cache: dict[str, object] = {str(config.class_id): snapshot}
+        exams_cache: dict[tuple[str, int], object] = {(str(config.class_id), config.class_number): exam_snapshot}
+        for spec in profile_specs:
             try:
-                profile_views.append(_build_public_profile(config, spec, current))
+                # Keep the established config-driven profiles on their old
+                # path byte-for-byte in behavior. Only Worker-managed
+                # profiles use the shared class/exam cache below.
+                if not spec.get("managed_profile"):
+                    profile_views.append(_build_public_profile(config, spec, current))
+                    profile_specs_by_id[str(spec.get("id", "profile"))] = spec
+                    continue
+                class_id = str(spec.get("class_id", ""))
+                class_number = int(spec.get("class_number", 0))
+                if class_id not in changes_cache:
+                    changes_cache[class_id], _ = fetch_source(config, current.date(), class_id=class_id)
+                if (class_id, class_number) not in exams_cache:
+                    exams_cache[(class_id, class_number)] = fetch_exams(
+                        config, current.date(), class_id=class_id, class_number=class_number
+                    )
+                profile_spec = dict(spec)
+                profile_spec["changes_snapshot"] = changes_cache[class_id]
+                profile_spec["exams_snapshot"] = exams_cache[(class_id, class_number)]
+                profile = _build_public_profile(config, profile_spec, current)
+                profile_specs_by_id[str(profile.get("id"))] = profile_spec
+                profile_views.append(profile)
             except (ShahafSourceError, SyncFailure, ValueError, OSError) as profile_exc:
+                output_id = str(spec.get("public_id", spec.get("id", "profile")))
+                output_path = site_path / "students" / output_id if spec.get("managed_profile") else ya1_site_path
+                previous_profile = previous_managed.get(output_id, {})
+                profile_specs_by_id[output_id] = spec
                 profile_views.append(
-                    _profile_failure(spec, previous_ya1, current, str(profile_exc))
+                    _profile_failure(spec, previous_profile if spec.get("managed_profile") else previous_ya1, current, str(profile_exc))
                 )
 
         transit_spec = config.transit or {}
@@ -396,16 +486,23 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
         transit_download_error: str | None = None
         transit_cache: dict[date, object] = {}
         for profile in profile_views:
-            if str(profile.get("id")) != "ya1":
+            profile_spec = profile_specs_by_id.get(str(profile.get("id")), {})
+            if str(profile.get("id")) != "ya1" and not profile_spec.get("managed_profile"):
                 continue
-            origin_address = str(transit_spec.get("origin_address", "מרדכי זעירא 5, רעננה"))
+            profile_transit = profile_spec.get("transit") if profile_spec.get("managed_profile") else transit_spec
+            profile_transit = profile_transit if isinstance(profile_transit, dict) else {}
+            if profile_spec.get("managed_profile") and not bool(profile_transit.get("enabled", False)):
+                continue
+            origin_address = str(profile_transit.get("origin_address", transit_spec.get("origin_address", "מרדכי זעירא 5, רעננה")))
             destination_address = str(transit_spec.get("destination_address", "אוסטרובסקי 26, רעננה"))
             try:
-                origin_raw = transit_spec["origin_coordinates"]
+                origin_raw = transit_spec.get("origin_coordinates", {})
+                if profile_spec.get("managed_profile"):
+                    origin_raw = {"lat": profile_transit["origin_lat"], "lon": profile_transit["origin_lon"]}
                 destination_raw = transit_spec["destination_coordinates"]
                 origin = (float(origin_raw["lat"]), float(origin_raw["lon"]))
                 destination = (float(destination_raw["lat"]), float(destination_raw["lon"]))
-                if not bool(transit_spec.get("enabled", False)):
+                if not bool(profile_transit.get("enabled", False)):
                     raise TransitSourceError("Ya1 transit wake is disabled in config")
                 if transit_archive is None and transit_download_error is None:
                     transit_archive, transit_timestamp = download_gtfs(
@@ -430,15 +527,23 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
                     now=current,
                     origin=origin,
                     destination=destination,
-                    max_walk_m=int(transit_spec.get("max_walk_m", 1800)),
+                    max_walk_m=int(profile_transit.get("max_walk_m", transit_spec.get("max_walk_m", 1800))),
                     source_timestamp=transit_timestamp,
                     origin_address=origin_address,
                     destination_address=destination_address,
                 )
+                if profile_spec.get("managed_profile"):
+                    # New student endpoints may show the selected route, but
+                    # never publish a home address or precise home point.
+                    for key in ("origin_address", "origin", "origin_coordinates"):
+                        profile["transit_wake"].pop(key, None)
             except (KeyError, TypeError, ValueError, TransitSourceError, OSError) as transit_exc:
                 transit_download_error = str(transit_exc) if transit_archive is None else transit_download_error
                 profile["transit_wake"] = _stale_transit_payload(config, current, str(transit_exc))
                 profile["transit_wake"]["source_timestamp"] = transit_timestamp
+                if profile_spec.get("managed_profile"):
+                    for key in ("origin_address", "origin", "origin_coordinates"):
+                        profile["transit_wake"].pop(key, None)
         render_site(
             site_path,
             title=config.site_title,
@@ -455,11 +560,16 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
             alarm_safety_reason=alarm_safety_reason,
         )
         for profile in profile_views:
+            profile_spec = profile_specs_by_id.get(str(profile.get("id")), {})
+            managed = bool(profile_spec.get("managed_profile"))
+            if managed and not profile.get("active", True):
+                continue
             profile_schedule = profile.get("schedule") if profile.get("schedule_available") else None
             profile_exams = profile.get("exams") if profile.get("exams_available") else None
+            profile_output = site_path / "students" / str(profile.get("id")) if managed else ya1_site_path
             render_site(
-                ya1_site_path,
-                title=str(profile.get("label", "Ostrovsky Grade 11-1")),
+                profile_output,
+                title="Student schedule" if managed else str(profile.get("label", "Ostrovsky Grade 11-1")),
                 generated_at=current.isoformat(),
                 source_url=str(profile.get("source_url", f"{config.source_base_url}?cls=61&tab=changes")),
                 source_updated=str(profile.get("source_updated", "")),
@@ -471,10 +581,11 @@ def execute(root: Path, config: Config, dry_run: bool = False, now: datetime | N
                 exams=profile_exams if isinstance(profile_exams, list) else None,
                 now=current,
                 profile_id=str(profile.get("id", "ya1")),
-                profile_label=str(profile.get("label", "Grade 11-1")),
-                profile_mark=str(profile.get("mark", "XI·1")),
+                profile_label="Student schedule" if managed else str(profile.get("label", "Grade 11-1")),
+                profile_mark="STUDENT" if managed else str(profile.get("mark", "XI·1")),
                 profile_class_id=str(profile.get("class_id", "61")),
-                publish_wake=False,
+                publish_wake=managed,
+                public_profile=managed,
                 transit_wake=profile.get("transit_wake") if isinstance(profile.get("transit_wake"), dict) else None,
             )
         print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
@@ -509,10 +620,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Sync Ostrovsky Shahaf changes into a personal ICS Gist.")
     parser.add_argument("--config", type=Path, default=Path("config.json"))
     parser.add_argument("--dry-run", action="store_true", help="Fetch and reconcile without writing the Gist.")
+    parser.add_argument("--profiles-file", type=Path, help="Private JSON bundle fetched from the admin Worker.")
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[2]
     try:
-        execute(root, load_config(root / args.config), dry_run=args.dry_run)
+        profiles_path = (root / args.profiles_file) if args.profiles_file and not args.profiles_file.is_absolute() else args.profiles_file
+        execute(root, load_config(root / args.config), dry_run=args.dry_run, managed_profiles_path=profiles_path)
         return 0
     except (OSError, SyncFailure, json.JSONDecodeError) as exc:
         print(f"SAFE FAILURE: {exc}")

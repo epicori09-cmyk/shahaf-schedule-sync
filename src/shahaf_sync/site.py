@@ -288,6 +288,7 @@ def render_site(
     profile_mark: str = "XI·2",
     profile_class_id: str = "11",
     publish_wake: bool = True,
+    public_profile: bool = False,
     transit_wake: dict[str, Any] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -295,6 +296,10 @@ def render_site(
     visible_changes = [item for item in changes if not _change_is_past(item, now)]
     periods = _period_metadata()
     exams_data = [_exam_to_dict(item) for item in (exams or [])]
+    safe_transit_wake = dict(transit_wake) if transit_wake is not None else None
+    if public_profile and safe_transit_wake is not None:
+        for key in ("origin_address", "origin", "origin_coordinates"):
+            safe_transit_wake.pop(key, None)
     primary_profile = {
         "id": profile_id,
         "label": profile_label,
@@ -311,7 +316,7 @@ def render_site(
         "stale": stale,
         "error": error,
         "generated_at": generated_at,
-        "transit_wake": transit_wake if profile_id == "ya1" else None,
+        "transit_wake": safe_transit_wake if (profile_id == "ya1" or public_profile) else None,
     }
     data = {
         "id": profile_id,
@@ -341,9 +346,12 @@ def render_site(
             alarm_safety=alarm_safety,
             alarm_safety_reason=alarm_safety_reason,
         )
+        if public_profile:
+            wake_data["profile_id"] = profile_id
+            wake_data["alarm_label"] = f"Shahaf Wake - {profile_id[:6].upper()}"
         data["wake"] = wake_data
-    if transit_wake is not None:
-        data["transit_wake"] = transit_wake
+    if safe_transit_wake is not None:
+        data["transit_wake"] = safe_transit_wake
     (output_dir / "data.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -351,9 +359,9 @@ def render_site(
         (output_dir / "wake.json").write_text(
             json.dumps(wake_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-    elif transit_wake is not None:
+    elif safe_transit_wake is not None:
         (output_dir / "wake.json").write_text(
-            json.dumps(transit_wake, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            json.dumps(safe_transit_wake, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
     status = (
@@ -379,9 +387,10 @@ def render_site(
     primary_profile_json = json.dumps(primary_profile, ensure_ascii=False).replace("</", "<\\/")
     schedule_available = "true" if schedule is not None else "false"
     sync_display = _pretty_timestamp(last_successful_sync or generated_at)
-    theme_class = "theme-pink" if profile_id == "ya1" else "theme-green"
+    theme_class = "theme-pink" if (profile_id == "ya1" or public_profile) else "theme-green"
+    robots = '<meta name="robots" content="noindex,nofollow,noarchive">' if public_profile else ""
     html = f'''<!doctype html>
-<html lang="en" dir="ltr"><head><meta charset="utf-8">
+<html lang="en" dir="ltr"><head><meta charset="utf-8">{robots}
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#f4f6f3">
 <meta name="description" content="{escape(title)}">

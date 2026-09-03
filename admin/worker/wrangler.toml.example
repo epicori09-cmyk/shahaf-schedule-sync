@@ -1,0 +1,14 @@
+name = "shahaf-profile-admin"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "shahaf-profiles"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+ADMIN_ORIGIN = "https://admin.example.com"
+PUBLIC_SITE_ORIGIN = "https://epicori09-cmyk.github.io/shahaf-schedule-sync"
+GITHUB_REPO = "oreomans21/shahaf-schedule-sync"
+GITHUB_REF = "main"

@@ -2,6 +2,11 @@ name: Shahaf schedule sync
 
 on:
   workflow_dispatch:
+    inputs:
+      profile_id:
+        description: "Managed profile that requested a refresh (optional)"
+        required: false
+        type: string
   schedule:
     # Refresh before the iPhone's 05:00 wake-alarm automation. The timezone
     # keeps this stable across Israel's daylight-saving transitions.
@@ -39,6 +44,12 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
+      - name: Fetch private managed profiles
+        env:
+          PROFILE_SYNC_URL: ${{ secrets.PROFILE_SYNC_URL }}
+          PROFILE_SYNC_TOKEN: ${{ secrets.PROFILE_SYNC_TOKEN }}
+        run: python scripts/fetch_managed_profiles.py --output "$RUNNER_TEMP/managed-profiles.json"
+
       - name: Run Shahaf sync
         id: sync
         continue-on-error: true
@@ -46,7 +57,7 @@ jobs:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           NVIDIA_NIM_MODEL: ${{ vars.NVIDIA_NIM_MODEL }}
-        run: PYTHONPATH=src python -m shahaf_sync --config config.json
+        run: PYTHONPATH=src python -m shahaf_sync --config config.json --profiles-file "$RUNNER_TEMP/managed-profiles.json"
 
       - name: Update Alexa wake-up reminder
         if: steps.sync.outcome == 'success'
