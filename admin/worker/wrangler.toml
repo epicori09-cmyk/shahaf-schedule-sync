@@ -11,5 +11,5 @@ database_id = "2b1d2537-522b-4722-9280-8424b130e494"
 [vars]
 ADMIN_ORIGIN = "https://shahaf-profile-admin.trading-api-9de14d.workers.dev"
 PUBLIC_SITE_ORIGIN = "https://epicori09-cmyk.github.io/shahaf-schedule-sync"
-GITHUB_REPO = "oreomans21/shahaf-schedule-sync"
+GITHUB_REPO = "epicori09-cmyk/shahaf-schedule-sync"
 GITHUB_REF = "main"
