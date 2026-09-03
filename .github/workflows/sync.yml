@@ -44,21 +44,6 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
-      - name: Diagnose profile service response
-        env:
-          PROFILE_SYNC_TOKEN: ${{ secrets.PROFILE_SYNC_TOKEN }}
-        run: |
-          set +e
-          curl --silent --show-error --dump-header "$RUNNER_TEMP/profile-headers.txt" \
-            --output "$RUNNER_TEMP/profile-body.txt" \
-            --write-out "profile_probe_status=%{http_code}\n" \
-            --header "Authorization: Bearer $PROFILE_SYNC_TOKEN" \
-            --header "Accept: application/json" \
-            "https://shahaf-profile-admin.trading-api-9de14d.workers.dev/internal/profiles"
-          sed -n '1,20p' "$RUNNER_TEMP/profile-headers.txt"
-          head -c 500 "$RUNNER_TEMP/profile-body.txt"
-          printf '\n'
-
       - name: Fetch private managed profiles
         id: profiles
         env:

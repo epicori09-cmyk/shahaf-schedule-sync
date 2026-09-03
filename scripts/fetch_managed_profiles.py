@@ -19,7 +19,14 @@ if not url and not token:
     raise SystemExit(0)
 if not url or not token:
     raise SystemExit("PROFILE_SYNC_URL and PROFILE_SYNC_TOKEN must be configured together")
-request = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+request = Request(
+    url,
+    headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": "shahaf-schedule-sync/1.0",
+    },
+)
 try:
     with urlopen(request, timeout=30) as response:
         if response.status < 200 or response.status >= 300:
