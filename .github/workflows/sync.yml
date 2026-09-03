@@ -8,13 +8,9 @@ on:
         required: false
         type: string
   schedule:
-    # Refresh before the iPhone's 05:00 wake-alarm automation. The timezone
-    # keeps this stable across Israel's daylight-saving transitions.
-    - cron: "30 4 * * *"
-      timezone: "Asia/Jerusalem"
-    - cron: "30 6 * * *"
-      timezone: "Asia/Jerusalem"
-    - cron: "30 7 * * *"
+    # Check Shahaf changes at the start of every hour. The timezone keeps the
+    # schedule aligned with Israel's daylight-saving transitions.
+    - cron: "0 * * * *"
       timezone: "Asia/Jerusalem"
 
 permissions:
