@@ -44,6 +44,22 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
+      - name: Diagnose profile secret wiring
+        env:
+          PROFILE_SYNC_URL: ${{ secrets.PROFILE_SYNC_URL }}
+          PROFILE_SYNC_TOKEN: ${{ secrets.PROFILE_SYNC_TOKEN }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          from urllib.parse import urlparse
+          token = os.environ.get("PROFILE_SYNC_TOKEN", "")
+          url = urlparse(os.environ.get("PROFILE_SYNC_URL", ""))
+          print(f"profile_url={url.scheme}://{url.netloc}{url.path}")
+          print(f"profile_token_length={len(token)}")
+          print(f"profile_token_sha256={hashlib.sha256(token.encode()).hexdigest()}")
+          PY
+
       - name: Fetch private managed profiles
         id: profiles
         env:
