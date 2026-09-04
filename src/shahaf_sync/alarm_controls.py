@@ -196,16 +196,21 @@ def apply_alarm_controls(
     result = dict(wake)
     current = now or datetime.now(timezone.utc)
     active_override = _override_is_active(override, current)
+    override_matches_day = active_override and (
+        not override.get("target_date")
+        or override.get("target_date") == result.get("next_school_day")
+    )
     result["alarm_label"] = str(settings.get("alarm_label") or "Shahaf")
     result["alarm_control"] = {
         "enabled": bool(settings.get("enabled", True)),
         "wake_buffer_minutes": int(settings.get("wake_buffer_minutes", 75)),
         "round_to_minutes": int(settings.get("round_to_minutes", 1)),
-        "override_active": active_override,
+        "override_active": override_matches_day,
+        "override_pending": bool(active_override and not override_matches_day),
         "transit_min_arrival_margin": int(settings.get("transit_min_arrival_margin", 5)),
     }
 
-    if active_override:
+    if override_matches_day:
         action = str(override.get("action") or "leave")
         target_date = override.get("target_date")
         unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}

@@ -654,7 +654,8 @@ export default {
       await saveSettingsHistory(env, "global", null, current.settings);
       await env.DB.prepare("UPDATE alarm_global_settings SET settings_json=?1, updated_at=?2, updated_by='admin' WHERE id=1").bind(JSON.stringify(checked.settings), now()).run();
       await writeAudit(env, null, "global-settings-updated", { settings: checked.settings });
-      return json({ settings: checked.settings, status: "saved" });
+      try { await triggerPublish(env, "global-alarm-settings-updated"); } catch (error) { return json({ error: `Global settings saved but publish failed: ${error.message}` }, 502); }
+      return json({ settings: checked.settings, status: "queued" });
     }
     if (url.pathname === "/api/alarm-settings/rollback" && request.method === "POST") {
       if (!(await rateLimit(env, `alarm-settings:${await hash(cookie(request, "__Host-shahaf_session"))}`, 20, 3600))) return json({ error: "alarm settings rate limit reached" }, 429);

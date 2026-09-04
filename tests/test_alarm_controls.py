@@ -63,8 +63,8 @@ class AlarmControlTests(unittest.TestCase):
     def test_non_force_override_cannot_replace_on_stale_or_unsafe_data(self) -> None:
         settings = resolve_alarm_settings({}, {}, "profile-1")
         for wake in (
-            {"stale": True, "fallback_status": "stale", "shortcut_action": "leave"},
-            {"stale": False, "fallback_status": "no-safe-route", "shortcut_action": "leave"},
+            {"next_school_day": "2026-09-06", "stale": True, "fallback_status": "stale", "shortcut_action": "leave"},
+            {"next_school_day": "2026-09-06", "stale": False, "fallback_status": "no-safe-route", "shortcut_action": "leave"},
         ):
             result = apply_alarm_controls(
                 wake,
@@ -83,7 +83,7 @@ class AlarmControlTests(unittest.TestCase):
 
     def test_force_override_can_bypass_unsafe_data(self) -> None:
         result = apply_alarm_controls(
-            {"stale": True, "fallback_status": "stale", "shortcut_action": "leave"},
+            {"next_school_day": "2026-09-06", "stale": True, "fallback_status": "stale", "shortcut_action": "leave"},
             resolve_alarm_settings({}, {}, "profile-1"),
             override={
                 "target_date": "2026-09-06",
@@ -111,10 +111,33 @@ class AlarmControlTests(unittest.TestCase):
             "wake_at": "2026-09-06T06:10:00+03:00",
             "expires_at": "2026-09-06T20:59:59Z",
         }
-        result = apply_alarm_controls({"shortcut_action": "leave", "enabled": False}, settings, override=override, now=now)
+        result = apply_alarm_controls(
+            {"next_school_day": "2026-09-06", "shortcut_action": "leave", "enabled": False},
+            settings,
+            override=override,
+            now=now,
+        )
         self.assertEqual(result["wake_time"], "06:10")
         self.assertEqual(result["shortcut_action"], "set")
         self.assertTrue(result["alarm_control"]["override_active"])
+
+    def test_future_override_waits_for_its_target_day(self) -> None:
+        now = datetime(2026, 9, 4, 5, 0, tzinfo=ISRAEL)
+        result = apply_alarm_controls(
+            {"next_school_day": "2026-09-05", "shortcut_action": "set", "wake_time": "07:15"},
+            resolve_alarm_settings({}, {}, "profile-1"),
+            override={
+                "target_date": "2026-09-06",
+                "action": "set",
+                "wake_at": "2026-09-06T06:10:00+03:00",
+                "expires_at": "2026-09-06T20:59:59Z",
+            },
+            now=now,
+        )
+        self.assertEqual(result["wake_time"], "07:15")
+        self.assertEqual(result["shortcut_action"], "set")
+        self.assertFalse(result["alarm_control"]["override_active"])
+        self.assertTrue(result["alarm_control"]["override_pending"])
 
 
 if __name__ == "__main__":
