@@ -25,6 +25,12 @@ EVENT_REVIEW_TERMS = (
     "school closed",
 )
 
+EXPLICIT_NO_SCHOOL_TERMS = (
+    "יום למידה א-סינכרוני",
+    "יום למידה אסינכרוני",
+    "יום למידה א סינכרוני",
+)
+
 
 def event_key(event: ShahafEvent) -> tuple[object, ...]:
     return (
@@ -42,6 +48,12 @@ def event_requires_review(event: ShahafEvent) -> bool:
     """Return true only for titles that may remove normal attendance."""
     text = f"{event.title} {event.detail}".casefold()
     return any(term.casefold() in text for term in EVENT_REVIEW_TERMS)
+
+
+def is_explicit_no_school(event: ShahafEvent) -> bool:
+    """Recognize Shahaf's exact asynchronous-learning-day announcement."""
+    text = f"{event.title} {event.detail}".casefold()
+    return any(term.casefold() in text for term in EXPLICIT_NO_SCHOOL_TERMS)
 
 
 def event_periods(event: ShahafEvent) -> set[int]:

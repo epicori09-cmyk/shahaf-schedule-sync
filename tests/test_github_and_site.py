@@ -192,7 +192,7 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual(data["exams"][0]["reminder_date"], "2026-09-02")
             self.assertTrue(data["exams_available"])
 
-    def test_site_has_event_view_and_filters_finished_events(self) -> None:
+    def test_site_keeps_event_data_for_safety_but_hides_events_view(self) -> None:
         with TemporaryDirectory() as directory:
             render_site(
                 Path(directory),
@@ -223,7 +223,8 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
-            self.assertIn("Events", html)
+            self.assertNotIn('id="events-tab"', html)
+            self.assertNotIn('id="events-view"', html)
             self.assertIn("יום למידה א-סינכרוני", html)
             self.assertEqual([item["title"] for item in data["events"]], ["יום למידה א-סינכרוני"])
 

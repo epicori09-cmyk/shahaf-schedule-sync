@@ -55,7 +55,34 @@ class FakeNim:
         return type("Decision", (), {"safe_to_delete_alarm": True, "risk_level": "low", "reason": "safe"})()
 
 
+class NoCallNim:
+    def classify_event(self, context):
+        raise AssertionError("the exact no-school event should not require NIM")
+
+
 class CliEventIntegrationTests(unittest.TestCase):
+    def test_explicit_async_learning_day_is_approved_without_nim(self) -> None:
+        event = ShahafEvent(
+            date(2026, 9, 9),
+            "יום למידה א-סינכרוני",
+            start_period=0,
+            end_period=14,
+            class_numbers=(2,),
+            class_scope="יא-2",
+        )
+        result = cli._process_events(
+            snapshot=EventSnapshot([event], "fresh", "events"),
+            schedule=[{"date": "2026-09-09", "period": 1, "subject": "Math", "start": "08:30", "end": "09:10"}],
+            exams=[],
+            class_number=2,
+            current=datetime(2026, 9, 4, 5, 0, tzinfo=ZoneInfo("Asia/Jerusalem")),
+            profile_id="master-ya2",
+            nim_client=NoCallNim(),
+        )
+        self.assertEqual(result.alarm_safety, "approved")
+        self.assertEqual(result.schedule, [])
+        self.assertEqual(result.events[0]["classification"], "no_school")
+
     def test_approved_async_event_updates_only_its_occurrence(self) -> None:
         event = ShahafEvent(
             date(2026, 9, 9),

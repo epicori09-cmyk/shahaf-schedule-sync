@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 import unittest
 
-from shahaf_sync.events import apply_event_decisions, event_requires_review, event_to_dict
+from shahaf_sync.events import apply_event_decisions, event_requires_review, event_to_dict, is_explicit_no_school
 from shahaf_sync.ics import parse_calendar
 from shahaf_sync.model import ShahafEvent
 from shahaf_sync.nim import EventSafetyDecision
@@ -29,6 +29,16 @@ END:VCALENDAR\r
 
 
 class EventProcessingTests(unittest.TestCase):
+    def test_async_learning_day_is_explicitly_no_school(self) -> None:
+        event = ShahafEvent(
+            date(2026, 9, 9),
+            "יום למידה א-סינכרוני",
+            start_period=0,
+            end_period=14,
+            class_scope="יא-1...יא-9",
+        )
+        self.assertTrue(is_explicit_no_school(event))
+
     def test_async_event_suppresses_only_its_date_and_periods(self) -> None:
         event = ShahafEvent(
             date(2026, 9, 9),

@@ -30,7 +30,7 @@ class NimTests(unittest.TestCase):
         body = json.loads(seen[0].data.decode())
         self.assertEqual(body["temperature"], 0)
         self.assertEqual(body["reasoning_effort"], "high")
-        self.assertEqual(body["max_tokens"], 1024)
+        self.assertEqual(body["max_tokens"], 4096)
         self.assertIn("untrusted schedule data", body["messages"][0]["content"])
 
     def test_medium_risk_is_not_an_allow_decision(self) -> None:
@@ -85,6 +85,22 @@ class NimTests(unittest.TestCase):
         )
         with self.assertRaises(NimError):
             client.classify_event({})
+
+    def test_event_classifier_reports_truncated_empty_content(self) -> None:
+        def transport(_request: Request):
+            return 200, json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {"content": None},
+                            "finish_reason": "length",
+                        }
+                    ]
+                }
+            ).encode()
+
+        with self.assertRaisesRegex(NimError, "finish_reason=length"):
+            NimSafetyClient("nvapi-test", transport=transport).classify_event({})
 
 
 if __name__ == "__main__":

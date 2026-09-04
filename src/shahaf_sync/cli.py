@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from .github import GistClient, GitHubError
-from .events import apply_event_decisions, decision_allows_suppression, event_key, event_requires_review, event_to_dict
+from .events import apply_event_decisions, decision_allows_suppression, event_key, event_requires_review, event_to_dict, is_explicit_no_school
 from .exams import reconcile_exam_events
 from .ics import CalendarFormatError, parse_calendar
 from .model import EventSnapshot, Lesson, SourceSnapshot
@@ -259,7 +259,14 @@ def _process_events(
             for item in exams
             if getattr(item, "date", None) is not None and item.date.isoformat() == event_date
         ]
-        if nim_client is None:
+        if is_explicit_no_school(event):
+            decision: object = EventSafetyDecision(
+                "no_school",
+                True,
+                "low",
+                "Shahaf explicitly marks this date as an asynchronous learning day with no in-person school.",
+            )
+        elif nim_client is None:
             decision: object = EventSafetyDecision(
                 "uncertain",
                 False,

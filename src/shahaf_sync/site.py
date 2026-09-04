@@ -493,11 +493,8 @@ def render_site(
     gate_script = '''<script>(()=>{const expected="אורי המלך";const body=document.body;const gate=document.getElementById("site-access-gate");const form=document.getElementById("gate-form");const input=document.getElementById("gate-phrase");const error=document.getElementById("gate-error");const unlock=()=>{body.classList.remove("site-locked");gate.hidden=true};form.addEventListener("submit",(event)=>{event.preventDefault();if(input.value.trim()===expected)unlock();else{error.textContent=document.documentElement.lang==="he"?"המשפט אינו נכון.":"That phrase is not correct.";input.select()}});input.focus()})();</script>''' if profile_id == "ya1" else ""
 
     exams_html = '''<section class="exams" id="exams-view" aria-labelledby="exams-title" hidden><div class="section-title"><h2 id="exams-title" data-i18n="exams">Exams</h2><span id="exams-count">0</span></div><div class="exam-list" id="exam-list"></div></section>'''
-    events_html = '''<section class="changes" id="events-view" aria-labelledby="events-title" hidden><div class="section-title"><h2 id="events-title" data-i18n="events">Events</h2><span id="events-count">0</span></div><p id="events-status" class="date-line"></p><div class="change-list" id="event-list"></div></section>'''
-
     schedule_json = json.dumps(schedule_data, ensure_ascii=False).replace("</", "<\\/")
     periods_json = json.dumps(periods, ensure_ascii=False)
-    events_json = json.dumps(visible_events, ensure_ascii=False).replace("</", "<\\/")
     primary_profile_json = json.dumps(primary_profile, ensure_ascii=False).replace("</", "<\\/")
     schedule_available = "true" if schedule is not None else "false"
     sync_display = _pretty_timestamp(last_successful_sync or generated_at)
@@ -506,7 +503,7 @@ def render_site(
     ui_translations = {
         "en": {
             "mySchedule": "My schedule", "openShahaf": "Open Shahaf", "scheduleViews": "Schedule views",
-            "now": "Now", "fullSchedule": "Full schedule", "exams": "Exams", "events": "Events", "loadingToday": "Loading today’s schedule…",
+            "now": "Now", "fullSchedule": "Full schedule", "exams": "Exams", "loadingToday": "Loading today’s schedule…",
             "todaysSchedule": "Today’s schedule", "checking": "Checking…", "nextUp": "Next up", "syncNeedsAttention": "Sync needs attention",
             "synced": "Synced", "errorDetails": "Error details", "busPlan": "Bus plan", "checkingRoute": "Checking the safest scheduled route…",
             "ready": "Ready", "leaveHome": "Leave home", "arriveBy": "arrive by", "earlierBuses": "Earlier buses were considered; this is the latest scheduled departure that still arrives safely.",
@@ -522,10 +519,9 @@ def render_site(
             "lessonSingular": "lesson", "scheduleUnavailable": "Schedule unavailable", "tryAgain": "Try again later", "timetableAfterSync": "The synced timetable will appear after the next successful sync",
             "noClassRightNow": "No class right now", "betweenLessons": "You’re between lessons", "noMoreLessons": "No more lessons", "allDone": "You’re all done for the synced schedule",
             "inPeriod": "You’re in Period", "nextLesson": "Next lesson", "noLessonsToday": "No lessons scheduled today", "nothingElse": "Nothing else is scheduled in the synced timetable",
-            "noUpcomingEvents": "No upcoming school events.", "eventOverlay": "Overlay · normal lessons remain", "eventNoSchool": "No school", "eventRemote": "Remote learning", "eventReview": "Needs review", "eventNormal": "Attendance event", "eventsUnavailable": "Events are unavailable; the timetable and alarm were left unchanged.",
         },
         "he": {
-            "mySchedule": "המערכת שלי", "openShahaf": "פתיחת שחף", "scheduleViews": "תצוגות מערכת", "now": "עכשיו", "fullSchedule": "מערכת מלאה", "exams": "מבחנים", "events": "אירועים",
+            "mySchedule": "המערכת שלי", "openShahaf": "פתיחת שחף", "scheduleViews": "תצוגות מערכת", "now": "עכשיו", "fullSchedule": "מערכת מלאה", "exams": "מבחנים",
             "loadingToday": "טוען את המערכת של היום…", "todaysSchedule": "המערכת של היום", "checking": "בודק…", "nextUp": "השיעור הבא", "syncNeedsAttention": "נדרשת תשומת לב לסנכרון",
             "synced": "מסונכרן", "errorDetails": "פרטי שגיאה", "busPlan": "תוכנית נסיעה", "checkingRoute": "בודק את המסלול המתוזמן הבטוח ביותר…", "ready": "מוכן",
             "leaveHome": "יציאה מהבית", "arriveBy": "הגעה עד", "earlierBuses": "נבדקו גם אוטובוסים מוקדמים יותר; זהו האוטובוס המאוחר ביותר שמגיע בזמן.", "verifyRoute": "בדיקת המסלול ב-Google Maps ↗",
@@ -537,7 +533,6 @@ def render_site(
             "freePeriod": "שעה פנויה", "nothingScheduled": "אין שיעור מתוכנן", "lesson": "שיעור", "room": "חדר", "gapsIncluded": "כולל הפסקות", "lessons": "שיעורים", "lessonSingular": "שיעור",
             "scheduleUnavailable": "המערכת אינה זמינה", "tryAgain": "נסה שוב מאוחר יותר", "timetableAfterSync": "המערכת תופיע לאחר סנכרון מוצלח הבא", "noClassRightNow": "אין שיעור עכשיו", "betweenLessons": "אתה בין שיעורים",
             "noMoreLessons": "אין עוד שיעורים", "allDone": "סיימת את המערכת להיום", "inPeriod": "אתה בשעה", "nextLesson": "השיעור הבא", "noLessonsToday": "אין שיעורים היום", "nothingElse": "אין שיעורים נוספים במערכת",
-            "noUpcomingEvents": "אין אירועי בית ספר קרובים.", "eventOverlay": "אירוע נלווה · השיעורים הרגילים נשארים", "eventNoSchool": "אין לימודים", "eventRemote": "למידה מרחוק", "eventReview": "דורש בדיקה", "eventNormal": "אירוע עם נוכחות", "eventsUnavailable": "האירועים אינם זמינים; המערכת וההתראה נשארו ללא שינוי.",
         },
     }
     ui_translations_json = json.dumps(ui_translations, ensure_ascii=False).replace("</", "<\\/")
@@ -580,12 +575,11 @@ html[dir="rtl"] .identity,html[dir="rtl"] .source,html[dir="rtl"] .view-switch,h
 {gate_css}
 </style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}{gate_script}<main class="app">
 <header class="topbar"><a class="identity" href="."><span class="mark">{escape(profile_mark)}</span><span><strong>My schedule</strong><small>{escape(profile_label)}</small></span></a><a class="source" id="source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer" aria-label="Open Shahaf">↗</a></header>
- <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Full schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button><button id="events-tab" type="button" aria-selected="false">Events</button></nav>
+  <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Full schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
 <section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p>{transit_html}</section>
 <section id="full-view" class="full-schedule" hidden aria-labelledby="full-title"><div class="schedule-heading"><div><p class="eyebrow">Every period</p><h2 id="full-title">Full schedule</h2></div><button id="back-to-now" class="small-button" type="button">Back to now</button></div><div id="day-picker" class="day-picker" role="listbox" aria-label="Choose a school day"></div><div class="selected-day"><div><h3 id="selected-day-title">Loading…</h3><p id="selected-day-summary"></p></div><button id="jump-today" class="small-button" type="button">Today</button></div><div id="schedule-periods" class="period-list"></div></section>
  {exams_html}
- {events_html}
-{changes_html}
+ {changes_html}
 <footer class="footer"><span>Last successful sync: <span id="last-sync">{escape(sync_display)}</span></span><a id="footer-source-link" href="{escape(source_url)}" target="_blank" rel="noreferrer">Open Shahaf ↗</a></footer>
 </main><script>
 const uiTranslations = {ui_translations_json};
@@ -597,7 +591,7 @@ document.querySelectorAll("[data-i18n]").forEach((element) => {{ element.textCon
 setUiText(".identity strong", "mySchedule");
 const sourceLink = document.getElementById("source-link"); if (sourceLink) sourceLink.setAttribute("aria-label", tr("openShahaf"));
 const viewSwitch = document.querySelector(".view-switch"); if (viewSwitch) viewSwitch.setAttribute("aria-label", tr("scheduleViews"));
- setUiText("#now-tab", "now"); setUiText("#full-tab", "fullSchedule"); setUiText("#exams-tab", "exams"); setUiText("#events-tab", "events");
+ setUiText("#now-tab", "now"); setUiText("#full-tab", "fullSchedule"); setUiText("#exams-tab", "exams");
 setUiText("#today-label", "loadingToday"); setUiText("#today-title", "todaysSchedule");
 setUiText("#current-subject", "checking"); setUiText("#next-subject", "checking");
 const lessonKickers = document.querySelectorAll(".lesson-kicker"); if (lessonKickers[0]) lessonKickers[0].textContent = tr("now"); if (lessonKickers[1]) lessonKickers[1].textContent = tr("nextUp");
@@ -608,7 +602,6 @@ const syncLabel = document.getElementById("last-sync"); if (syncLabel && syncLab
 if (shahafIsHebrew) document.title = tr("mySchedule");
  const activeProfile = {primary_profile_json};
  const periods = {periods_json};
- const initialEvents = {events_json};
 const scheduleZone = "Asia/Jerusalem";
 const dateFormatter = new Intl.DateTimeFormat(uiLocale, {{ weekday: "long", month: "long", day: "numeric", timeZone: scheduleZone }});
 const shortDateFormatter = new Intl.DateTimeFormat(uiLocale, {{ weekday: "short", month: "short", day: "numeric", timeZone: scheduleZone }});
@@ -617,10 +610,7 @@ let schedule = activeProfile.schedule || [];
 let scheduleAvailable = Boolean(activeProfile.schedule_available);
 let changes = activeProfile.changes || [];
  let exams = activeProfile.exams || [];
- let events = activeProfile.events || initialEvents || [];
- const eventsAvailable = activeProfile.events_available !== false;
- const eventsError = activeProfile.events_error || "";
-const transitWake = activeProfile.transit_wake || null;
+ const transitWake = activeProfile.transit_wake || null;
 function nowInSchoolZone() {{ const parts = new Intl.DateTimeFormat("en-CA", {{ timeZone: scheduleZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }}).formatToParts(new Date()); const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value])); return {{ date: `${{values.year}}-${{values.month}}-${{values.day}}`, minutes: Number(values.hour) * 60 + Number(values.minute) }}; }}
 function minutes(value) {{ const [hour, minute] = value.split(":").map(Number); return hour * 60 + minute; }}
 function formatTime(value) {{ const [hour, minute] = value.split(":").map(Number); if (shahafIsHebrew) return `${{String(hour).padStart(2, "0")}}:${{String(minute).padStart(2, "0")}}`; return `${{hour % 12 || 12}}:${{String(minute).padStart(2, "0")}} ${{hour >= 12 ? "PM" : "AM"}}`; }}
@@ -636,10 +626,7 @@ function renderFullDay(targetDate) {{ const dates = scheduleDates(); if (!dates.
 function changeIsPast(change) {{ const now = nowInSchoolZone(); if (change.date < now.date) return true; if (change.date > now.date) return false; const slot = periods.find((item) => item.period === Number(change.period)); return slot ? now.minutes >= minutes(slot.end) : false; }}
 function renderChanges() {{ const list = document.getElementById("change-list"); const count = document.getElementById("changes-count"); const visible = changes.filter((item) => !changeIsPast(item)); count.textContent = String(visible.length); if (!visible.length) {{ list.innerHTML = `<div class="quiet">No upcoming cancellations or updates.</div>`; return; }} list.innerHTML = visible.map((item) => {{ const label = item.kind === "cancelled" ? "Cancelled" : item.kind === "added" ? "Added" : "Changed"; const subject = item.subject || "Schedule update"; return `<article class="change-row ${{escapeHtml(item.kind)}}"><div class="change-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Period ${{escapeHtml(item.period)}}</span></div><div class="change-body"><div><span class="change-label">${{label}}</span><h3>${{escapeHtml(subject)}}</h3></div><p>${{escapeHtml(item.detail || "Schedule update")}}</p></div></article>`; }}).join(""); }}
  function renderExams() {{ const list = document.getElementById("exam-list"); const count = document.getElementById("exams-count"); count.textContent = String(exams.length); if (!exams.length) {{ list.innerHTML = `<div class="quiet">No upcoming exams found for this profile.</div>`; return; }} list.innerHTML = exams.map((item) => {{ let periodText = String(item.start_period); if (item.end_period !== item.start_period) periodText += `–${{item.end_period}}`; return `<article class="exam-row"><div class="exam-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>Periods ${{escapeHtml(periodText)}}</span></div><div class="exam-body"><h3>${{escapeHtml(item.subject)}}</h3><p>Reminder: 4 days before · 7:00 PM</p></div></article>`; }}).join(""); }}
- function eventIsPast(item) {{ const now = nowInSchoolZone(); if (item.date < now.date) return true; if (item.date > now.date) return false; if (item.end) return now.minutes >= minutes(item.end); if (item.end_period !== null && item.end_period !== undefined) {{ const slot = periods.find((period) => period.period === Math.min(Number(item.end_period), 13)); return slot ? now.minutes >= minutes(slot.end) : false; }} return false; }}
- function eventLabel(item) {{ return item.classification === "no_school" ? "No school" : item.classification === "remote_learning" ? "Remote learning" : item.classification === "uncertain" ? "Needs review" : item.classification === "normal_school" ? "Attendance event" : "Overlay"; }}
- function renderEvents() {{ const list = document.getElementById("event-list"); const count = document.getElementById("events-count"); const status = document.getElementById("events-status"); if (!list || !count || !status) return; const visible = events.filter((item) => !eventIsPast(item)); count.textContent = String(visible.length); status.textContent = eventsAvailable ? "" : "Events are unavailable; the timetable and alarm were left unchanged."; if (!visible.length) {{ list.innerHTML = `<div class="quiet">No upcoming school events.</div>`; return; }} list.innerHTML = visible.map((item) => {{ const classification = item.classification || "overlay"; const range = item.start ? `${{formatTime(item.start)}}–${{formatTime(item.end)}}` : item.start_period !== null && item.start_period !== undefined ? `Period ${{item.start_period}}–${{item.end_period}}` : ""; const detailText = item.decision_reason || item.detail || "School event"; return `<article class="change-row event-row ${{escapeHtml(classification)}}"><div class="change-date"><strong>${{escapeHtml(item.date.split("-").reverse().join("."))}}</strong><span>${{escapeHtml(range)}}</span></div><div class="change-body event-body"><div><span class="change-label event-label">${{escapeHtml(eventLabel(item))}}</span><h3>${{escapeHtml(item.title)}}</h3></div><p>${{escapeHtml(detailText)}}</p></div></article>`; }}).join(""); }}
- function setView(view) {{ const full = view === "full"; const examsView = view === "exams"; const eventsView = view === "events"; document.getElementById("now-view").hidden = full || examsView || eventsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("events-view").hidden = !eventsView; document.getElementById("changes-view").hidden = full || examsView || eventsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("events-tab").classList.toggle("is-active", eventsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); document.getElementById("events-tab").setAttribute("aria-selected", String(eventsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} if (eventsView) renderEvents(); window.scrollTo({{top: 0, behavior: "smooth"}}); }}
+ function setView(view) {{ const full = view === "full"; const examsView = view === "exams"; document.getElementById("now-view").hidden = full || examsView; document.getElementById("full-view").hidden = !full; document.getElementById("exams-view").hidden = !examsView; document.getElementById("changes-view").hidden = full || examsView; document.getElementById("now-tab").classList.toggle("is-active", view === "now"); document.getElementById("full-tab").classList.toggle("is-active", full); document.getElementById("exams-tab").classList.toggle("is-active", examsView); document.getElementById("now-tab").setAttribute("aria-selected", String(view === "now")); document.getElementById("full-tab").setAttribute("aria-selected", String(full)); document.getElementById("exams-tab").setAttribute("aria-selected", String(examsView)); if (full) {{ const today = nowInSchoolZone().date; renderFullDay(scheduleDates().includes(today) ? today : scheduleDates()[0]); }} window.scrollTo({{top: 0, behavior: "smooth"}}); }}
 function localizeRenderedUi() {{
   document.querySelectorAll("#change-list .change-label").forEach((element) => {{ element.textContent = element.textContent === "Cancelled" ? tr("cancelled") : element.textContent === "Added" ? tr("added") : tr("changed"); }});
   document.querySelectorAll("#change-list h3").forEach((element) => {{ if (element.textContent === "Schedule update") element.textContent = tr("scheduleUpdate"); }});
@@ -647,9 +634,6 @@ function localizeRenderedUi() {{
   document.querySelectorAll("#exam-list .exam-date span").forEach((element) => {{ element.textContent = element.textContent.replace(/^Periods? /, tr("periods") + " "); }});
   document.querySelectorAll("#change-list .quiet").forEach((element) => {{ element.textContent = tr("noUpcomingChanges"); }});
    document.querySelectorAll("#exam-list .quiet").forEach((element) => {{ element.textContent = tr("noUpcomingExams"); }});
-   document.querySelectorAll("#event-list .quiet").forEach((element) => {{ element.textContent = tr("noUpcomingEvents"); }});
-   document.querySelectorAll("#event-list .event-label").forEach((element) => {{ const value = element.textContent; element.textContent = value === "No school" ? tr("eventNoSchool") : value === "Remote learning" ? tr("eventRemote") : value === "Needs review" ? tr("eventReview") : value === "Attendance event" ? tr("eventNormal") : tr("eventOverlay"); }});
-   const eventStatus = document.getElementById("events-status"); if (eventStatus && !eventsAvailable) eventStatus.textContent = tr("eventsUnavailable");
   document.querySelectorAll("#exam-list .exam-body p").forEach((element) => {{ element.textContent = tr("reminder"); }});
   document.querySelectorAll("#schedule-periods .gap-label").forEach((element) => {{ element.textContent = tr("freePeriod"); }});
   document.querySelectorAll("#schedule-periods .gap-sub").forEach((element) => {{ element.textContent = tr("nothingScheduled"); }});
@@ -670,11 +654,10 @@ function localizeRenderedUi() {{
 const localizeLiveState = () => {{ const current = document.getElementById("current-subject"); const currentDetail = document.getElementById("current-detail"); const next = document.getElementById("next-subject"); const nextDetail = document.getElementById("next-detail"); const note = document.getElementById("schedule-note"); if (current) {{ if (current.textContent === "Schedule unavailable") current.textContent = tr("scheduleUnavailable"); else if (current.textContent === "No class right now") current.textContent = tr("noClassRightNow"); }} if (currentDetail) {{ if (currentDetail.textContent === "The synced timetable is not available yet") currentDetail.textContent = tr("timetableAfterSync"); else if (currentDetail.textContent === "You’re between lessons") currentDetail.textContent = tr("betweenLessons"); else if (currentDetail.textContent === "No lessons scheduled today") currentDetail.textContent = tr("noLessonsToday"); }} if (next) {{ if (next.textContent === "Try again later") next.textContent = tr("tryAgain"); else if (next.textContent === "No more lessons") next.textContent = tr("noMoreLessons"); }} if (nextDetail && nextDetail.textContent === "Nothing else is scheduled in the synced timetable") nextDetail.textContent = tr("nothingElse"); if (note) {{ if (note.textContent.indexOf("You’re in Period ") === 0) note.textContent = tr("inPeriod") + " " + note.textContent.slice(17) + (shahafIsHebrew ? " עכשיו" : " now"); else if (note.textContent.indexOf("Next lesson: Period ") === 0) note.textContent = tr("nextLesson") + ": " + tr("period") + " " + note.textContent.slice(20); else if (note.textContent === "You’re all done for the synced schedule") note.textContent = tr("allDone"); }} }};
 const baseRenderChanges = renderChanges; renderChanges = () => {{ baseRenderChanges(); localizeRenderedUi(); }};
 const baseRenderExams = renderExams; renderExams = () => {{ baseRenderExams(); localizeRenderedUi(); }};
-const baseRenderEvents = renderEvents; renderEvents = () => {{ baseRenderEvents(); localizeRenderedUi(); }};
 const baseRenderFullDay = renderFullDay; renderFullDay = (targetDate) => {{ baseRenderFullDay(targetDate); const summary = document.getElementById("selected-day-summary"); if (summary) {{ const count = document.querySelectorAll("#schedule-periods .has-lesson").length; summary.textContent = count + " " + (count === 1 ? tr("lessonSingular") : tr("lessons")) + " · " + tr("gapsIncluded"); }} localizeRenderedUi(); }};
 const baseRefreshLiveLessons = refreshLiveLessons; refreshLiveLessons = () => {{ baseRefreshLiveLessons(); localizeLiveState(); }};
 const baseRenderTransitWake = renderTransitWake; renderTransitWake = () => {{ baseRenderTransitWake(); localizeRenderedUi(); }};
- document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("events-tab").addEventListener("click", () => setView("events")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => renderFullDay(nowInSchoolZone().date));
+ document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => renderFullDay(nowInSchoolZone().date));
 let swipeStart = null;
 const swipeSurface = document.querySelector(".app");
 swipeSurface.addEventListener("touchstart", (event) => {{
@@ -689,13 +672,12 @@ swipeSurface.addEventListener("touchend", (event) => {{
   const dy = touch.clientY - swipeStart.y;
   swipeStart = null;
   if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
-   const legacyViews = ["now", "full", "exams"];
-   const views = ["now", "full", "exams", "events"];
-   const currentView = !document.getElementById("events-view").hidden ? "events" : document.getElementById("exams-view").hidden ? (document.getElementById("full-view").hidden ? "now" : "full") : "exams";
+   const views = ["now", "full", "exams"];
+   const currentView = document.getElementById("exams-view").hidden ? (document.getElementById("full-view").hidden ? "now" : "full") : "exams";
   const nextIndex = views.indexOf(currentView) + (dx < 0 ? 1 : -1);
   if (nextIndex >= 0 && nextIndex < views.length) setView(views[nextIndex]);
 }}, {{ passive: true }});
- renderChanges(); renderExams(); renderEvents(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); renderEvents(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+ renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 </script></body></html>
 '''
     (output_dir / "index.html").write_text(html, encoding="utf-8")
