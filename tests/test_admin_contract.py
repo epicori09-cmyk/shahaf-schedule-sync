@@ -14,7 +14,7 @@ class AdminContractTests(unittest.TestCase):
             self.assertIn(route, source)
         for import_control in ("id=\"classNumber\"", "id=\"editPayload\"", "id=\"editOriginAddress\"", "id=\"blockEditor\"", "Weekly timetable", "Gap / free period", "body.class_number", "YA_CLASS_IDS", "Enter only the visible יא class number", "shortcut_url", 'alarm_label: "Shahaf"', "Shortcut URL (paste into Get Contents of URL)"):
             self.assertIn(import_control, source)
-        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "Permanently delete this profile", "Enable transit-based wake planning", "Publish now", "Alarm control center", "Force through stale/unsafe data", "Restore this version", "route_alternatives", "published_at"):
+        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "Permanently delete this profile", "Enable transit-based wake planning", "Publish now", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at"):
             self.assertIn(control, source)
         self.assertIn("GITHUB_DISPATCH_TOKEN", source)
         self.assertNotIn("GIST_TOKEN", source)
