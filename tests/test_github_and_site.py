@@ -193,13 +193,16 @@ class GithubAndSiteTests(unittest.TestCase):
             manifest = json.loads((output / "manifest.webmanifest").read_text(encoding="utf-8"))
             self.assertIn('rel="icon" href="./icon.svg"', html)
             self.assertIn('sizes="180x180"', html)
+            self.assertIn('<img class="mark" src="./header-logo.png" alt="" aria-hidden="true">', html)
             self.assertEqual([item["sizes"] for item in manifest["icons"]], ["192x192", "512x512"])
             self.assertTrue((output / "sw.js").exists())
+            self.assertEqual((output / "header-logo.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             for size in (180, 192, 512):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
             self.assertIn("fonts/Heebo-400.ttf", (output / "sw.js").read_text(encoding="utf-8"))
-            self.assertIn("-v2", (output / "sw.js").read_text(encoding="utf-8"))
+            self.assertIn("-v3", (output / "sw.js").read_text(encoding="utf-8"))
+            self.assertIn('"./header-logo.png"', (output / "sw.js").read_text(encoding="utf-8"))
 
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:
         with TemporaryDirectory() as directory:
@@ -492,13 +495,28 @@ class GithubAndSiteTests(unittest.TestCase):
 
     def test_wake_data_sets_a_future_alarm_for_tomorrow(self) -> None:
         wake = build_wake_data(
-            [{"date": "2026-09-04", "period": 1, "start": "08:30", "subject": "Math"}],
+            [{"date": "2026-09-06", "period": 1, "start": "08:30", "subject": "Math"}],
             schedule_available=True,
             stale=False,
             now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
         )
-        self.assertEqual(wake["next_school_day"], "2026-09-04")
+        self.assertEqual(wake["next_school_day"], "2026-09-06")
         self.assertFalse(wake["alarm_for_today"])
+        self.assertEqual(wake["shortcut_action"], "set")
+
+    def test_wake_data_skips_friday_and_saturday_but_keeps_sunday(self) -> None:
+        wake = build_wake_data(
+            [
+                {"date": "2026-09-04", "period": 1, "start": "08:30", "subject": "Friday"},
+                {"date": "2026-09-05", "period": 1, "start": "08:30", "subject": "Saturday"},
+                {"date": "2026-09-06", "period": 1, "start": "08:30", "subject": "Sunday"},
+            ],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["next_school_day"], "2026-09-06")
+        self.assertEqual(wake["subject"], "Sunday")
         self.assertEqual(wake["shortcut_action"], "set")
 
     def test_blocked_alarm_safety_preserves_existing_alarm(self) -> None:

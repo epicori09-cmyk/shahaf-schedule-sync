@@ -16,11 +16,8 @@ flow, not a generated or inferred shortcut:
 5. **Find Alarms** where **Label is exactly** `Shahaf`.
 6. If the Find Alarms result has any value, **Delete Alarms**.
 7. If `AlarmAction` is `clear`, **Stop This Shortcut**.
-8. Get `alarm_for_today` from `WakeData` → **Get Text from Input** → set as
-   `AlarmToday`.
-9. If `AlarmToday` is `No`, **Stop This Shortcut**.
-10. Get `wake_at` from `WakeData` → **Get Dates from Input**.
-11. **Create Alarm** for that date/time with label `Shahaf`.
+8. Get `wake_at` from `WakeData` → **Get Dates from Input**.
+9. **Create Alarm** for that date/time with label `Shahaf`.
 
 The configured student URL is intentionally not copied into this log because
 the public ID is the access path for that student's page. The live template is
@@ -29,14 +26,17 @@ the public ID is the access path for that student's page. The live template is
 ### Endpoint compatibility note
 
 The student endpoint returns a JSON object with `shortcut_action`,
-`alarm_for_today` (a Boolean), and `wake_at` (an ISO-8601 timestamp). In
-Shortcuts, converting `false` to Text may display `No`. That does **not** mean
-there is no alarm to create: it means `wake_at` targets the next school day.
-Therefore the logged `AlarmToday is No → Stop This Shortcut` branch skips a
-valid future alarm on weekends or other no-school days. The endpoint-compatible
-flow keeps the `leave` and `clear` stop branches, but removes that `AlarmToday`
-stop branch and creates the `wake_at` alarm whenever `shortcut_action` is
-`set`.
+`alarm_for_today` (a Boolean), and `wake_at` (an ISO-8601 timestamp). The
+Shortcut should not branch on `alarm_for_today`: `false` can simply mean that
+the endpoint is preparing the next valid school day. The endpoint-compatible
+flow keeps the `leave` and `clear` stop branches and creates the `wake_at`
+alarm whenever `shortcut_action` is `set`.
+
+The schedule and transit wake planners explicitly ignore Friday and Saturday
+dates (the Israeli weekend). Sunday remains a valid school day. When a valid
+response has no school on the current weekend, the default `clear` action
+removes only the app's exact labeled alarm; stale or uncertain responses still
+return `leave` so an existing alarm is preserved.
 
 The public endpoint is:
 

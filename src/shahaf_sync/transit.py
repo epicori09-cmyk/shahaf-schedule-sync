@@ -29,6 +29,7 @@ ORIGIN_ADDRESS = "מרדכי זעירא 5, רעננה"
 DESTINATION_ADDRESS = "אוסטרובסקי 26, רעננה"
 YA1_ALARM_LABEL = "Shahaf Ya1 Wake"
 MIN_ORIGIN_WALK_MINUTES = 5
+ISRAEL_WEEKEND_WEEKDAYS = frozenset({4, 5})  # Friday and Saturday
 
 
 class TransitSourceError(RuntimeError):
@@ -357,6 +358,8 @@ def build_ya1_transit_wake(
             lesson_date = date.fromisoformat(str(lesson["date"]))
             time.fromisoformat(str(lesson["start"]))
         except (KeyError, TypeError, ValueError):
+            continue
+        if lesson_date.weekday() in ISRAEL_WEEKEND_WEEKDAYS:
             continue
         if lesson_date >= current.date():
             by_date.setdefault(lesson_date, []).append(lesson)

@@ -79,6 +79,22 @@ class TransitWakeTests(unittest.TestCase):
         self.assertNotIn("route_preference_used", result)
         self.assertNotIn("arrival_margin_minutes", result)
 
+    def test_skips_friday_and_saturday_lessons_but_keeps_sunday(self) -> None:
+        result = build_ya1_transit_wake(
+            schedule(trip("bus", time(7, 20), time(8, 25))),
+            [
+                {"date": "2026-09-04", "start": "08:30", "subject": "Friday"},
+                {"date": "2026-09-05", "start": "08:30", "subject": "Saturday"},
+                {"date": "2026-09-06", "start": "08:30", "subject": "Sunday"},
+            ],
+            now=datetime(2026, 9, 3, 5, 0),
+            origin=ORIGIN,
+            destination=DESTINATION,
+        )
+        self.assertEqual(result["next_school_day"], "2026-09-06")
+        self.assertEqual(result["subject"], "Sunday")
+        self.assertEqual(result["shortcut_action"], "set")
+
     def test_managed_payload_includes_safe_route_alternatives(self) -> None:
         result = build_ya1_transit_wake(
             schedule(

@@ -16,11 +16,13 @@ from .reconcile import ChangeRecord
 
 
 PWA_ASSETS_DIR = Path(__file__).with_name("assets")
+ISRAEL_WEEKEND_WEEKDAYS = frozenset({4, 5})  # Friday and Saturday
 
 
 def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bool) -> None:
     """Give every rendered schedule page the same installable app identity."""
     theme = "pink" if pink else "green"
+    (output_dir / "header-logo.png").write_bytes((PWA_ASSETS_DIR / "header-logo.png").read_bytes())
     icon_source = (PWA_ASSETS_DIR / f"icon-{theme}.svg").read_text(encoding="utf-8")
     (output_dir / "icon.svg").write_text(icon_source, encoding="utf-8")
     for size in (180, 192, 512):
@@ -54,9 +56,9 @@ def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bo
     (output_dir / "manifest.webmanifest").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    cache_name = f"shahaf-schedule-{safe_profile_id}-v2"
+    cache_name = f"shahaf-schedule-{safe_profile_id}-v3"
     service_worker = f'''const CACHE_NAME = {json.dumps(cache_name)};
-const APP_SHELL = ["./", "./index.html", "./data.json", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png", "./fonts/Heebo-400.ttf", "./fonts/Heebo-500.ttf", "./fonts/Heebo-600.ttf", "./fonts/Heebo-700.ttf", "./fonts/Heebo-800.ttf"];
+const APP_SHELL = ["./", "./index.html", "./data.json", "./manifest.webmanifest", "./header-logo.png", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png", "./fonts/Heebo-400.ttf", "./fonts/Heebo-500.ttf", "./fonts/Heebo-600.ttf", "./fonts/Heebo-700.ttf", "./fonts/Heebo-800.ttf"];
 
 self.addEventListener("install", (event) => {{
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -337,6 +339,8 @@ def build_wake_data(
                 candidate = date.fromisoformat(str(item["date"]))
             except ValueError:
                 continue
+            if candidate.weekday() in ISRAEL_WEEKEND_WEEKDAYS:
+                continue
             if candidate >= current_day:
                 candidate_dates.add(candidate)
         candidate_dates = sorted(candidate_dates)
@@ -370,6 +374,8 @@ def build_wake_data(
             item_date = date.fromisoformat(str(item["date"]))
             time.fromisoformat(str(item["start"]))
         except (KeyError, TypeError, ValueError):
+            continue
+        if item_date.weekday() in ISRAEL_WEEKEND_WEEKDAYS:
             continue
         if item_date >= today:
             by_date.setdefault(item_date, []).append(item)
@@ -641,7 +647,7 @@ def render_site(
 *{{box-sizing:border-box}}html{{background:var(--paper);overscroll-behavior-x:none}}body{{margin:0;min-height:100vh;background:var(--paper);color:var(--ink);font-family:"HeeboLocal","Avenir Next","SF Pro Display","Noto Sans Hebrew","Heebo",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.4;-webkit-font-smoothing:antialiased;padding-bottom:env(safe-area-inset-bottom)}}
 .app{{width:calc(100% - 28px);max-width:620px;margin:0 auto;padding:max(18px,env(safe-area-inset-top)) 0 34px;touch-action:pan-y}}
 .app{{contain:layout style}}body:not(.app-ready) #current-subject,body:not(.app-ready) #next-subject{{color:transparent;position:relative}}body:not(.app-ready) #current-subject::after,body:not(.app-ready) #next-subject::after{{content:"";display:block;width:68%;height:1em;border-radius:8px;background:linear-gradient(100deg,#ffffff14 20%,#ffffff32 38%,#ffffff14 56%);background-size:220% 100%;animation:skeleton-shimmer 1.25s linear infinite}}body:not(.app-ready) #next-subject::after{{width:78%;background:linear-gradient(100deg,#e4ecea 20%,#f7faf8 38%,#e4ecea 56%);background-size:220% 100%}}@keyframes skeleton-shimmer{{to{{background-position:-220% 0}}}}
-.topbar{{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}}.identity{{display:flex;align-items:center;gap:11px;color:var(--ink);text-decoration:none}}.mark{{display:grid;place-items:center;width:43px;height:43px;border-radius:14px;background:var(--ink);color:#fff;font-weight:800;font-size:14px;letter-spacing:-.05em}}.identity strong{{display:block;font-size:15px;letter-spacing:-.02em}}.identity small{{display:block;color:var(--muted);font-size:12px;margin-top:2px}}.source{{color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:50%;width:40px;height:40px;display:grid;place-items:center;font-size:19px;background:var(--card)}}
+.topbar{{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}}.identity{{display:flex;align-items:center;gap:11px;color:var(--ink);text-decoration:none}}.mark{{display:block;width:43px;height:43px;border-radius:14px;object-fit:cover;flex:0 0 43px}}.identity strong{{display:block;font-size:15px;letter-spacing:-.02em}}.identity small{{display:block;color:var(--muted);font-size:12px;margin-top:2px}}.source{{color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:50%;width:40px;height:40px;display:grid;place-items:center;font-size:19px;background:var(--card)}}
  .view-switch{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:4px;margin-bottom:27px;border:1px solid var(--line);border-radius:14px;background:#eaf0ed;touch-action:pan-y;user-select:none}}.view-switch button,.small-button,.day-chip{{font:inherit;border:0;cursor:pointer}}.view-switch button{{position:relative;min-height:38px;border-radius:10px;background:transparent;color:var(--muted);font-size:13px;font-weight:750;transition:background-color .36s cubic-bezier(.2,.8,.2,1),color .36s cubic-bezier(.2,.8,.2,1),box-shadow .36s cubic-bezier(.2,.8,.2,1),transform .36s cubic-bezier(.2,.8,.2,1)}}.view-switch button::after{{content:"";position:absolute;left:13px;right:13px;bottom:5px;height:2px;border-radius:99px;background:currentColor;opacity:0;transform:scaleX(.2);transition:opacity .36s ease,transform .36s cubic-bezier(.2,.8,.2,1)}}.view-switch button.is-active{{background:var(--card);color:var(--ink);box-shadow:0 2px 7px #142b3512;transform:translateY(-1px)}}.view-switch button.is-active::after{{opacity:.48;transform:scaleX(1)}}button:focus-visible,.identity:focus-visible{{outline:3px solid #8ecdc0;outline-offset:2px}}
 .status{{display:flex;align-items:center;gap:7px;color:var(--green);font-size:12px;font-weight:750;margin-bottom:11px}}.status-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px var(--green-soft)}}.stale{{color:#9b5b22}}.stale .status-dot{{background:#d18b3e;box-shadow:0 0 0 4px #f7e6ca}}.error{{margin:-2px 0 18px;color:#9b413a;font-size:12px}}.error summary{{cursor:pointer;font-weight:700}}.error pre{{white-space:pre-wrap;background:var(--red-soft);border-radius:10px;padding:10px;margin-top:8px}}
 .date-line{{color:var(--muted);font-size:14px;margin:0 0 5px}}h1,h2,h3,p{{margin-top:0}}h1{{font-size:clamp(35px,10vw,52px);line-height:1.02;letter-spacing:-.065em;margin:0 0 22px;font-weight:800}}.live-area{{margin-bottom:31px}}
@@ -665,7 +671,7 @@ html[dir="rtl"] .identity,html[dir="rtl"] .source,html[dir="rtl"] .view-switch,h
  .view-panel-enter-next{{animation:view-in-next .46s cubic-bezier(.2,.8,.2,1) both}}.view-panel-enter-previous{{animation:view-in-previous .46s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-next{{animation:day-in-next .42s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-previous{{animation:day-in-previous .42s cubic-bezier(.2,.8,.2,1) both}}
  {gate_css}
 </style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}{gate_script}<main class="app">
-<header class="topbar"><a class="identity" href="."><span class="mark">{escape(profile_mark)}</span><span><strong>My schedule</strong></span></a></header>
+<header class="topbar"><a class="identity" href="."><img class="mark" src="./header-logo.png" alt="" aria-hidden="true"><span><strong>My schedule</strong></span></a></header>
   <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
 <section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p>{transit_html}</section>
 <section id="full-view" class="full-schedule" hidden aria-labelledby="full-title"><div class="schedule-heading"><div><p class="eyebrow">Every period</p><h2 id="full-title">Schedule</h2></div><button id="back-to-now" class="small-button" type="button">Back to now</button></div><div id="full-day-surface" class="day-surface"><div id="day-picker" class="day-picker" role="listbox" aria-label="Choose a school day"></div><div id="full-day-content" class="day-content"><div id="day-notice" class="day-notice" role="status" hidden></div><div class="selected-day"><div><h3 id="selected-day-title">Loading…</h3><p id="selected-day-summary"></p></div><button id="jump-today" class="small-button" type="button">Today</button></div><div id="schedule-periods" class="period-list"></div></div></div></section>
