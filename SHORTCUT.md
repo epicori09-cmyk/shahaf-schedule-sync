@@ -3,6 +3,41 @@
 This uses the normal iPhone Clock alarm. It does not require Spotify,
 jailbreak access, Apple Developer membership, or a paid service.
 
+## Current installed student shortcut log
+
+Recorded 2026-09-05 from the currently working shortcut. This is an observed
+flow, not a generated or inferred shortcut:
+
+1. **Get Contents of URL** → the configured student `wake.json` URL.
+2. **Get Dictionary from Input** → set the result as `WakeData`.
+3. Get `shortcut_action` from `WakeData` → **Get Text from Input** → set as
+   `AlarmAction`.
+4. If `AlarmAction` is `leave`, **Stop This Shortcut**.
+5. **Find Alarms** where **Label is exactly** `Shahaf`.
+6. If the Find Alarms result has any value, **Delete Alarms**.
+7. If `AlarmAction` is `clear`, **Stop This Shortcut**.
+8. Get `alarm_for_today` from `WakeData` → **Get Text from Input** → set as
+   `AlarmToday`.
+9. If `AlarmToday` is `No`, **Stop This Shortcut**.
+10. Get `wake_at` from `WakeData` → **Get Dates from Input**.
+11. **Create Alarm** for that date/time with label `Shahaf`.
+
+The configured student URL is intentionally not copied into this log because
+the public ID is the access path for that student's page. The live template is
+`https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/<random-id>/wake.json`.
+
+### Endpoint compatibility note
+
+The student endpoint returns a JSON object with `shortcut_action`,
+`alarm_for_today` (a Boolean), and `wake_at` (an ISO-8601 timestamp). In
+Shortcuts, converting `false` to Text may display `No`. That does **not** mean
+there is no alarm to create: it means `wake_at` targets the next school day.
+Therefore the logged `AlarmToday is No → Stop This Shortcut` branch skips a
+valid future alarm on weekends or other no-school days. The endpoint-compatible
+flow keeps the `leave` and `clear` stop branches, but removes that `AlarmToday`
+stop branch and creates the `wake_at` alarm whenever `shortcut_action` is
+`set`.
+
 The public endpoint is:
 
 `https://epicori09-cmyk.github.io/shahaf-schedule-sync/wake.json`
