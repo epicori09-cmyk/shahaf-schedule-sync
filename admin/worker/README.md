@@ -33,6 +33,36 @@ authenticated `/internal/profiles` endpoint.
 
 The existing `GIST_TOKEN`, `NVIDIA_API_KEY`, and Alexa secrets are unchanged.
 
+## Alarm control center
+
+The dashboard includes a managed-profile-only alarm control center. It stores
+global defaults and per-profile overrides in D1, then includes the effective
+settings in the existing private profile bundle consumed by the Pages
+workflow. The next run of that profile's iPhone Shortcut applies the result;
+the Worker never receives or stores an iPhone, GitHub, or Gist credential.
+
+The defaults are a 75-minute wake buffer, stale data leaves the current alarm
+unchanged, and confirmed no-school data clears only that profile's primary
+alarm. Existing Ya-1 and Ya-2 paths are not connected to these controls.
+
+The dashboard supports preview, bulk pause/resume/reset/set/clear/leave
+commands, per-profile settings, expiring date overrides, audit history, and
+settings rollback. A force command requires an explicit reason and
+confirmation. Backup alarms are never managed. Transit-enabled managed
+profiles can set a safe route preference; the planner still requires arrival
+at least five minutes before the first lesson and falls back to automatic
+routing if the preference disappears.
+
+Apply the additive schema before deploying the Worker:
+
+`wrangler d1 execute shahaf-profiles --remote --file migrations/0002_alarm_controls.sql`
+
+The Pages workflow marks one-time commands as published only after a
+successful Pages deployment. It does not consume them: they remain in the
+published endpoint until their target date expires, because this version has
+no phone check-in yet. If publishing fails, the command remains pending and
+the previous public profile remains intact.
+
 ## Import flow
 
 Open the Worker URL, log in, paste the strict GPT JSON or load a `.json`

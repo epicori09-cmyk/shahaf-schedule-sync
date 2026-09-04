@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .ics import Calendar, IcsEvent
 from .events import event_is_past
+from .alarm_controls import apply_alarm_controls, public_alarm_settings
 from .model import PERIOD_TIMES
 from .model import Exam
 from .reconcile import ChangeRecord
@@ -288,6 +289,13 @@ def build_wake_data(
     now: datetime | None = None,
     alarm_safety: str | None = None,
     alarm_safety_reason: str = "",
+    buffer_minutes: int = 75,
+    min_wake_time: str | None = None,
+    max_wake_time: str | None = None,
+    round_to_minutes: int = 1,
+    no_lessons_policy: str = "clear",
+    stale_policy: str = "leave",
+    fallback_wake_time: str = "07:15",
 ) -> dict[str, Any]:
     """Build the safe, master-profile-only input for the iPhone Shortcut."""
 
@@ -308,7 +316,41 @@ def build_wake_data(
         "alarm_safety_reason": alarm_safety_reason,
         "timezone": "Asia/Jerusalem",
     }
+    zone = ZoneInfo("Asia/Jerusalem")
+    current = now or datetime.now(zone)
+    current = current.astimezone(zone) if current.tzinfo else current.replace(tzinfo=zone)
     if stale:
+        if stale_policy != "set_fixed" or not schedule:
+            base["fallback_status"] = "stale"
+            return base
+        current_day = current.date()
+        candidate_dates: set[date] = set()
+        for item in schedule:
+            if not isinstance(item, dict) or not item.get("date"):
+                continue
+            try:
+                candidate = date.fromisoformat(str(item["date"]))
+            except ValueError:
+                continue
+            if candidate >= current_day:
+                candidate_dates.add(candidate)
+        candidate_dates = sorted(candidate_dates)
+        for school_day in candidate_dates:
+            fallback_at = datetime.combine(school_day, time.fromisoformat(fallback_wake_time)).replace(tzinfo=zone)
+            if school_day == current_day and fallback_at <= current:
+                continue
+            base.update(
+                {
+                    "next_school_day": school_day.isoformat(),
+                    "wake_time": fallback_at.strftime("%H:%M"),
+                    "wake_at": fallback_at.isoformat(),
+                    "subject": None,
+                    "enabled": True,
+                    "shortcut_action": "set",
+                    "fallback_status": "stale-fixed",
+                }
+            )
+            return base
         base["fallback_status"] = "stale"
         return base
     if not schedule_available or schedule is None:
@@ -316,9 +358,6 @@ def build_wake_data(
         base["fallback_status"] = "unavailable"
         return base
 
-    zone = ZoneInfo("Asia/Jerusalem")
-    current = now or datetime.now(zone)
-    current = current.astimezone(zone) if current.tzinfo else current.replace(tzinfo=zone)
     today = current.date()
     by_date: dict[date, list[dict[str, Any]]] = {}
     for item in schedule:
@@ -333,8 +372,17 @@ def build_wake_data(
     for school_day in sorted(by_date):
         first = min(by_date[school_day], key=lambda item: (item["start"], item.get("period", 0)))
         first_start = time.fromisoformat(str(first["start"]))
-        wake_naive = datetime.combine(school_day, first_start) - timedelta(minutes=75)
+        wake_naive = datetime.combine(school_day, first_start) - timedelta(minutes=buffer_minutes)
+        if round_to_minutes > 1:
+            rounded_minutes = (wake_naive.hour * 60 + wake_naive.minute) // round_to_minutes * round_to_minutes
+            wake_naive = wake_naive.replace(hour=rounded_minutes // 60, minute=rounded_minutes % 60, second=0, microsecond=0)
         wake_local = wake_naive.replace(tzinfo=zone)
+        if min_wake_time and wake_local.time() < time.fromisoformat(min_wake_time):
+            base.update({"next_school_day": school_day.isoformat(), "fallback_status": "wake-time-bound", "shortcut_action": "leave"})
+            return base
+        if max_wake_time and wake_local.time() > time.fromisoformat(max_wake_time):
+            base.update({"next_school_day": school_day.isoformat(), "fallback_status": "wake-time-bound", "shortcut_action": "leave"})
+            return base
         if school_day == today and wake_local <= current:
             continue
         base.update(
@@ -357,7 +405,7 @@ def build_wake_data(
         return base
 
     base["fallback_status"] = "no-lessons"
-    base["shortcut_action"] = "clear"
+    base["shortcut_action"] = "clear" if no_lessons_policy == "clear" else "leave"
     if alarm_safety not in (None, "approved", "not-required"):
         base["shortcut_action"] = "leave"
     return base
@@ -390,6 +438,8 @@ def render_site(
     publish_wake: bool = True,
     public_profile: bool = False,
     transit_wake: dict[str, Any] | None = None,
+    alarm_settings: dict[str, Any] | None = None,
+    alarm_override: dict[str, Any] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     is_pink = profile_id == "ya1" or public_profile
@@ -457,10 +507,34 @@ def render_site(
             now=now,
             alarm_safety=alarm_safety,
             alarm_safety_reason=alarm_safety_reason,
+            buffer_minutes=int((alarm_settings or {}).get("wake_buffer_minutes", 75)),
+            min_wake_time=(alarm_settings or {}).get("min_wake_time"),
+            max_wake_time=(alarm_settings or {}).get("max_wake_time"),
+            round_to_minutes=int((alarm_settings or {}).get("round_to_minutes", 1)),
+            no_lessons_policy=str((alarm_settings or {}).get("no_lessons_policy", "clear")),
+            stale_policy=str((alarm_settings or {}).get("stale_policy", "leave")),
+            fallback_wake_time=str((alarm_settings or {}).get("fallback_wake_time", "07:15")),
         )
         if public_profile:
+            if safe_transit_wake is not None:
+                # Managed transit profiles use the route-aware payload as the
+                # Shortcut input. Legacy Ya-1 keeps its existing separate
+                # endpoint because public_profile is false there.
+                wake_data = dict(safe_transit_wake)
             wake_data["profile_id"] = profile_id
-            wake_data["alarm_label"] = "Shahaf"
+            if alarm_settings:
+                wake_data = apply_alarm_controls(
+                    wake_data,
+                    alarm_settings,
+                    override=alarm_override,
+                    now=now,
+                )
+                wake_data["alarm_control"] = {
+                    **wake_data.get("alarm_control", {}),
+                    "settings": public_alarm_settings(alarm_settings),
+                }
+            else:
+                wake_data["alarm_label"] = "Shahaf"
         data["wake"] = wake_data
     if safe_transit_wake is not None:
         data["transit_wake"] = safe_transit_wake

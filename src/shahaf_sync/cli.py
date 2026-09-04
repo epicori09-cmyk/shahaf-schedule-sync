@@ -181,6 +181,8 @@ def _profile_failure(
         "stale": True,
         "error": error,
         "generated_at": current.isoformat(),
+        "alarm_settings": spec.get("alarm_settings") if spec.get("managed_profile") else None,
+        "alarm_override": spec.get("alarm_override") if spec.get("managed_profile") else None,
     }
 
 
@@ -532,6 +534,10 @@ def _managed_specs(path: Path | None) -> list[dict[str, object]]:
             raise SyncFailure(f"Managed profile {public_id} is invalid: {exc}") from exc
         spec = package_to_spec(normalized, public_id)
         spec["package"] = normalized
+        if isinstance(record.get("alarm_settings"), dict):
+            spec["alarm_settings"] = record["alarm_settings"]
+        if isinstance(record.get("alarm_override"), dict):
+            spec["alarm_override"] = record["alarm_override"]
         result.append(spec)
     return result
 
@@ -741,6 +747,8 @@ def execute(
                 profile_schedule = profile.get("schedule")
                 if not isinstance(profile_schedule, list) or bool(profile.get("stale")):
                     raise TransitSourceError(str(profile.get("error") or "Ya1 Shahaf schedule is stale"))
+                alarm_settings = profile_spec.get("alarm_settings") if profile_spec.get("managed_profile") else {}
+                alarm_settings = alarm_settings if isinstance(alarm_settings, dict) else {}
                 profile["transit_wake"] = build_ya1_transit_wake(
                     schedule_for,
                     profile_schedule,
@@ -751,6 +759,14 @@ def execute(
                     source_timestamp=transit_timestamp,
                     origin_address=origin_address,
                     destination_address=destination_address,
+                    arrival_margin_minutes=int(alarm_settings.get("transit_min_arrival_margin", 5)),
+                    wake_buffer_minutes=int(alarm_settings.get("wake_buffer_minutes", 75)),
+                    walk_buffer_minutes=int(alarm_settings.get("transit_walk_buffer_minutes", 0)),
+                    route_preference=alarm_settings.get("transit_route_preference") if isinstance(alarm_settings.get("transit_route_preference"), dict) else None,
+                    round_to_minutes=int(alarm_settings.get("round_to_minutes", 1)),
+                    min_wake_time=alarm_settings.get("min_wake_time"),
+                    max_wake_time=alarm_settings.get("max_wake_time"),
+                    managed_controls=bool(profile_spec.get("managed_profile")),
                 )
                 if profile_spec.get("managed_profile"):
                     # New student endpoints may show the selected route, but
@@ -817,6 +833,8 @@ def execute(
                 publish_wake=managed,
                 public_profile=managed,
                 transit_wake=profile.get("transit_wake") if isinstance(profile.get("transit_wake"), dict) else None,
+                alarm_settings=profile_spec.get("alarm_settings") if managed and isinstance(profile_spec.get("alarm_settings"), dict) else None,
+                alarm_override=profile_spec.get("alarm_override") if managed and isinstance(profile_spec.get("alarm_override"), dict) else None,
             )
         print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes

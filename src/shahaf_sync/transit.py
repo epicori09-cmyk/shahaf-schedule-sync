@@ -148,6 +148,8 @@ def plan_route(
     not_before: datetime | None = None,
     max_walk_m: int = 1800,
     max_transfers: int = 2,
+    preferred_route_ids: set[str] | None = None,
+    latest_home_departure: datetime | None = None,
 ) -> TransitRoute | None:
     """Find the latest route whose final walk ends by ``arrival_deadline``."""
 
@@ -170,9 +172,11 @@ def plan_route(
     starts: list[tuple[datetime, datetime, str, int, int, TransitTrip]] = []
     for origin_stop_id, walk_to_origin in origin_stops:
         for trip, position in departures.get(origin_stop_id, ()):
+            if preferred_route_ids and trip.route_id not in preferred_route_ids:
+                continue
             first_bus = _gtfs_datetime(target_date, trip.stop_times[position].departure)
             home_departure = first_bus - timedelta(minutes=walk_to_origin)
-            if earliest <= home_departure and first_bus <= deadline:
+            if earliest <= home_departure and first_bus <= deadline and (latest_home_departure is None or home_departure <= latest_home_departure):
                 starts.append((home_departure, first_bus, origin_stop_id, walk_to_origin, position, trip))
     starts.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
 
@@ -301,6 +305,14 @@ def build_ya1_transit_wake(
     source_timestamp: str = "",
     origin_address: str = ORIGIN_ADDRESS,
     destination_address: str = DESTINATION_ADDRESS,
+    arrival_margin_minutes: int = 5,
+    wake_buffer_minutes: int = 75,
+    walk_buffer_minutes: int = 0,
+    route_preference: Mapping[str, object] | None = None,
+    round_to_minutes: int = 1,
+    min_wake_time: str | None = None,
+    max_wake_time: str | None = None,
+    managed_controls: bool = False,
 ) -> dict[str, object]:
     base: dict[str, object] = {
         "profile": "ya1",
@@ -324,6 +336,17 @@ def build_ya1_transit_wake(
         "timezone": "Asia/Jerusalem",
         "error": "",
     }
+    if managed_controls:
+        base.update(
+            {
+                "route_alternatives": [],
+                "arrival_margin_minutes": arrival_margin_minutes,
+                "wake_buffer_minutes": wake_buffer_minutes,
+                "round_to_minutes": round_to_minutes,
+                "route_preference_used": False,
+                "route_preference_fallback": False,
+            }
+        )
     if stale or schedule is None:
         return base
 
@@ -343,7 +366,7 @@ def build_ya1_transit_wake(
         first_start = time.fromisoformat(str(first["start"]))
         if school_day == current.date() and datetime.combine(school_day, first_start).replace(tzinfo=ZONE) <= current:
             continue
-        deadline = (datetime.combine(school_day, first_start) - timedelta(minutes=5)).time()
+        deadline = (datetime.combine(school_day, first_start) - timedelta(minutes=arrival_margin_minutes)).time()
         not_before = current if school_day == current.date() else _gtfs_datetime(school_day, time(0, 0))
         if isinstance(schedule, TransitSchedule):
             day_schedule = schedule
@@ -363,6 +386,9 @@ def build_ya1_transit_wake(
                 }
             )
             return base
+        preferred_route_ids = None
+        if route_preference and isinstance(route_preference.get("route_ids"), list):
+            preferred_route_ids = {str(value) for value in route_preference["route_ids"] if str(value)}
         route = plan_route(
             day_schedule,
             school_day,
@@ -371,7 +397,21 @@ def build_ya1_transit_wake(
             destination,
             not_before=not_before,
             max_walk_m=max_walk_m,
+            preferred_route_ids=preferred_route_ids,
         )
+        if route is None and preferred_route_ids:
+            # A pinned route is only a preference. If GTFS changed, safely
+            # return to the latest automatic route instead of leaving a stale
+            # route in the public endpoint.
+            route = plan_route(
+                day_schedule,
+                school_day,
+                deadline,
+                origin,
+                destination,
+                not_before=not_before,
+                max_walk_m=max_walk_m,
+            )
         if route is None:
             base.update(
                 {
@@ -384,29 +424,76 @@ def build_ya1_transit_wake(
                 }
             )
             return base
+        alternatives: list[dict[str, object]] = []
+        if managed_controls:
+            alternative_cutoff = route.departure - timedelta(minutes=1)
+            for _ in range(3):
+                alternative = plan_route(
+                    day_schedule,
+                    school_day,
+                    deadline,
+                    origin,
+                    destination,
+                    not_before=not_before,
+                    max_walk_m=max_walk_m,
+                    latest_home_departure=alternative_cutoff,
+                )
+                if alternative is None:
+                    break
+                alternatives.append(
+                    {
+                        "route_departure": alternative.departure.strftime("%H:%M"),
+                        "first_bus_departure": alternative.first_bus_departure.strftime("%H:%M"),
+                        "route_arrival": alternative.arrival.strftime("%H:%M"),
+                        "transfers": alternative.transfers,
+                        "route": list(alternative.legs),
+                    }
+                )
+                alternative_cutoff = alternative.departure - timedelta(minutes=1)
+        selected_route_ids = {
+            str(leg.get("route_id"))
+            for leg in route.legs
+            if isinstance(leg, dict) and leg.get("type") == "transit" and leg.get("route_id")
+        }
         # iPhone Clock alarms have minute precision. Round down before
         # subtracting the 75-minute buffer so the alarm is never later than
         # the calculated safe wake time.
-        wake_at = route.departure.replace(second=0, microsecond=0) - timedelta(minutes=75)
+        wake_at = route.departure.replace(second=0, microsecond=0) - timedelta(minutes=wake_buffer_minutes + walk_buffer_minutes)
+        if round_to_minutes > 1:
+            rounded_minutes = (wake_at.hour * 60 + wake_at.minute) // round_to_minutes * round_to_minutes
+            wake_at = wake_at.replace(hour=rounded_minutes // 60, minute=rounded_minutes % 60)
+        if min_wake_time and wake_at.time() < time.fromisoformat(min_wake_time):
+            base.update({"next_school_day": school_day.isoformat(), "fallback_status": "wake-time-bound", "shortcut_action": "leave"})
+            return base
+        if max_wake_time and wake_at.time() > time.fromisoformat(max_wake_time):
+            base.update({"next_school_day": school_day.isoformat(), "fallback_status": "wake-time-bound", "shortcut_action": "leave"})
+            return base
         if school_day == current.date() and wake_at <= current:
             continue
-        base.update(
-            {
-                "next_school_day": school_day.isoformat(),
-                "first_lesson_start": first_start.strftime("%H:%M"),
-                "arrival_deadline": deadline.strftime("%H:%M"),
-                "route_departure": route.departure.strftime("%H:%M"),
-                "first_bus_departure": route.first_bus_departure.strftime("%H:%M"),
-                "route_arrival": route.arrival.strftime("%H:%M"),
-                "route": list(route.legs),
-                "wake_time": wake_at.strftime("%H:%M"),
-                "wake_at": wake_at.isoformat(),
-                "subject": str(first.get("subject", "")),
-                "enabled": True,
-                "shortcut_action": "set",
-                "fallback_status": "none",
-            }
-        )
+        payload = {
+            "next_school_day": school_day.isoformat(),
+            "first_lesson_start": first_start.strftime("%H:%M"),
+            "arrival_deadline": deadline.strftime("%H:%M"),
+            "route_departure": route.departure.strftime("%H:%M"),
+            "first_bus_departure": route.first_bus_departure.strftime("%H:%M"),
+            "route_arrival": route.arrival.strftime("%H:%M"),
+            "route": list(route.legs),
+            "wake_time": wake_at.strftime("%H:%M"),
+            "wake_at": wake_at.isoformat(),
+            "subject": str(first.get("subject", "")),
+            "enabled": True,
+            "shortcut_action": "set",
+            "fallback_status": "none",
+        }
+        if managed_controls:
+            payload.update(
+                {
+                    "route_alternatives": alternatives,
+                    "route_preference_used": bool(preferred_route_ids and selected_route_ids.intersection(preferred_route_ids)),
+                    "route_preference_fallback": bool(preferred_route_ids and not selected_route_ids.intersection(preferred_route_ids)),
+                }
+            )
+        base.update(payload)
         return base
 
     base["fallback_status"] = "no-lessons"

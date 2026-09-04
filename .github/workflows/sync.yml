@@ -77,6 +77,14 @@ jobs:
         if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success'
         uses: actions/deploy-pages@v4
 
+      - name: Acknowledge managed alarm commands
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.deployment.outcome == 'success'
+        continue-on-error: true
+        env:
+          PROFILE_SYNC_URL: https://shahaf-profile-admin.trading-api-9de14d.workers.dev/internal/profiles
+          PROFILE_SYNC_TOKEN: ${{ secrets.PROFILE_SYNC_TOKEN }}
+        run: python scripts/ack_alarm_commands.py --profiles-file "$RUNNER_TEMP/managed-profiles.json"
+
       - name: Fail workflow when profile fetch or sync failed
         if: always() && (steps.profiles.outcome == 'failure' || steps.sync.outcome == 'failure')
         run: exit 1

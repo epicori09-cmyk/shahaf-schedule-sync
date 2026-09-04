@@ -67,6 +67,33 @@ class TransitWakeTests(unittest.TestCase):
         self.assertEqual(result["shortcut_action"], "set")
         self.assertEqual(result["subject"], "ספרות")
 
+    def test_legacy_payload_does_not_gain_managed_control_fields(self) -> None:
+        result = build_ya1_transit_wake(
+            schedule(trip("bus", time(7, 20), time(8, 25))),
+            [{"date": DAY.isoformat(), "start": "08:30", "subject": "ספרות"}],
+            now=datetime(2026, 9, 5, 12, 0),
+            origin=ORIGIN,
+            destination=DESTINATION,
+        )
+        self.assertNotIn("route_alternatives", result)
+        self.assertNotIn("route_preference_used", result)
+        self.assertNotIn("arrival_margin_minutes", result)
+
+    def test_managed_payload_includes_safe_route_alternatives(self) -> None:
+        result = build_ya1_transit_wake(
+            schedule(
+                trip("early", time(7, 0), time(8, 0)),
+                trip("latest-safe", time(7, 20), time(8, 25)),
+            ),
+            [{"date": DAY.isoformat(), "start": "08:30", "subject": "ספרות"}],
+            now=datetime(2026, 9, 5, 12, 0),
+            origin=ORIGIN,
+            destination=DESTINATION,
+            managed_controls=True,
+        )
+        self.assertIn("route_alternatives", result)
+        self.assertEqual(result["arrival_margin_minutes"], 5)
+
     def test_origin_walk_is_never_less_than_five_minutes(self) -> None:
         result = build_ya1_transit_wake(
             schedule(trip("bus", time(7, 20), time(8, 25))),
