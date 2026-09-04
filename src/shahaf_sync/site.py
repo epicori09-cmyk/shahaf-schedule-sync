@@ -612,7 +612,7 @@ def render_site(
     ui_translations_json = json.dumps(ui_translations, ensure_ascii=False).replace("</", "<\\/")
     html = f'''<!doctype html>
 <html lang="en" dir="ltr"><head><meta charset="utf-8">{robots}
-<script>const shahafDeviceLanguage=(navigator.languages&&navigator.languages[0])||navigator.language||"en";const shahafIsHebrew=/^(he|iw)(-|$)/i.test(shahafDeviceLanguage);document.documentElement.lang=shahafIsHebrew?"he":"en";document.documentElement.dir=shahafIsHebrew?"rtl":"ltr";</script>
+<script>const shahafParams=new URLSearchParams(location.search);const shahafForcedLanguage=shahafParams.get("lang");const shahafDeviceLanguage=(navigator.languages&&navigator.languages[0])||navigator.language||"en";const shahafIsHebrew=shahafForcedLanguage==="he"||(!["he","en"].includes(shahafForcedLanguage)&&/^(he|iw)(-|$)/i.test(shahafDeviceLanguage));document.documentElement.lang=shahafIsHebrew?"he":"en";document.documentElement.dir=shahafIsHebrew?"rtl":"ltr";</script>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#f4f6f3">
 <meta name="description" content="{escape(title)}">

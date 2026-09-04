@@ -23,7 +23,7 @@ def package() -> dict:
     return {
         "schema_version": 1,
         "student": {"name": None},
-        "shahaf": {"class_id": "11", "class_number": 2, "shared_subjects": [], "selectors": [], "exam_terms": ["מתמטיקה"]},
+        "shahaf": {"class_id": "11", "class_number": 2, "shared_subjects": [], "selectors": [], "exam_terms": ["מתמטיקה"], "english_level": "5_accelerated", "math_level": "5", "majors": ["computer_science", "diplomacy"]},
         "weekly_schedule": rows,
         "transit": {"enabled": False, "origin_address": None, "origin_lat": None, "origin_lon": None},
         "extraction": {"visible_weekdays": ["sunday", "monday"], "visible_periods": {}, "warnings": []},
@@ -34,6 +34,8 @@ class ProfilePackageTests(unittest.TestCase):
     def test_valid_package_preserves_hebrew_and_expands_only_lessons(self) -> None:
         normalized = validate_package(package())
         self.assertEqual(normalized["weekly_schedule"][1]["subject"], "מתמטיקה")
+        self.assertEqual(normalized["shahaf"]["english_level"], "5_accelerated")
+        self.assertEqual(normalized["shahaf"]["majors"], ["computer_science", "diplomacy"])
         lessons = build_package_schedule(normalized, date(2026, 9, 6), date(2026, 9, 7))
         self.assertEqual([(lesson.date, lesson.period) for lesson in lessons], [(date(2026, 9, 6), 1), (date(2026, 9, 7), 1)])
         self.assertEqual(package_to_spec(normalized, "A" * 22)["id"], "A" * 22)

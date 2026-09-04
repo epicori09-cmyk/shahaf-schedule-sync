@@ -12,12 +12,13 @@ class AdminContractTests(unittest.TestCase):
         source = (ROOT / "admin" / "worker" / "src" / "index.js").read_text(encoding="utf-8")
         for route in ("/api/login", "/api/logout", "/api/session", "/api/classes", "/api/profiles", "/api/profiles/import", "/enable$/", "/disable$/", "request.method === \"DELETE\"", "/internal/profiles", "/internal/alarm-commands/ack", "/api/alarm-settings", "/api/alarm-preview", "/api/alarm-bulk", "/alarm-history$/", "alarm-settings/rollback", "const publish ="):
             self.assertIn(route, source)
-        for import_control in ("id=\"classNumber\"", "id=\"editPayload\"", "id=\"editOriginAddress\"", "id=\"blockEditor\"", "Weekly timetable", "Gap / free period", "body.class_number", "YA_CLASS_IDS", "Enter only the visible יא class number", "shortcut_url", 'alarm_label: "Shahaf"', "Shortcut URL (paste into Get Contents of URL)"):
+        for import_control in ("id=\"classNumber\"", "id=\"editPayload\"", "id=\"englishLevel\"", "id=\"mathLevel\"", 'name=\"major\"', 'name=\"edit-major\"', "id=\"blockEditor\"", "Weekly timetable", "Gap / free period", "body.class_number", "YA_CLASS_IDS", "Enter the visible class number", "shortcut_url", 'alarm_label: "Shahaf"', "English schedule", "Hebrew schedule", "Shortcut endpoint"):
             self.assertIn(import_control, source)
-        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "Permanently delete this profile", "Enable transit-based wake planning", "Publish now", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at"):
+        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "Permanently delete this profile", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at"):
             self.assertIn(control, source)
         self.assertIn("GITHUB_DISPATCH_TOKEN", source)
         self.assertNotIn("GIST_TOKEN", source)
+        self.assertNotIn("dashboardEnhancements + alarmDashboardEnhancements", source)
         schema = (ROOT / "admin" / "worker" / "schema.sql").read_text(encoding="utf-8")
         migration = (ROOT / "admin" / "worker" / "migrations" / "0002_alarm_controls.sql").read_text(encoding="utf-8")
         for table in ("alarm_global_settings", "alarm_profile_settings", "alarm_settings_history", "alarm_overrides", "alarm_audit"):

@@ -15,6 +15,7 @@ from .model import Lesson
 
 WEEKDAYS = ("sunday", "monday", "tuesday", "wednesday", "thursday")
 WEEKDAY_NUMBER = {name: index for index, name in enumerate(WEEKDAYS)}
+PROFILE_LEVELS = {"3", "4", "5", "5_accelerated"}
 
 
 class ProfilePackageError(ValueError):
@@ -143,6 +144,15 @@ def validate_package(raw: Any) -> dict[str, Any]:
     if not isinstance(exam_exact_terms, list) or not all(isinstance(value, str) and value for value in exam_exact_terms):
         errors.append("shahaf.exam_exact_terms must be a list of non-empty strings")
         exam_exact_terms = []
+    english_level = shahaf.get("english_level")
+    math_level = shahaf.get("math_level")
+    for field, value in (("english_level", english_level), ("math_level", math_level)):
+        if value is not None and value != "" and str(value) not in PROFILE_LEVELS:
+            errors.append(f"shahaf.{field} must be 3, 4, 5, or 5_accelerated")
+    majors = shahaf.get("majors", [])
+    if not isinstance(majors, list) or not all(isinstance(value, str) and value.strip() for value in majors):
+        errors.append("shahaf.majors must be a list of non-empty strings")
+        majors = []
 
     rows = raw.get("weekly_schedule")
     if not isinstance(rows, list) or not rows:
@@ -257,6 +267,9 @@ def validate_package(raw: Any) -> dict[str, Any]:
             "selectors": selectors,
             "exam_terms": list(exam_terms),
             "exam_exact_terms": list(exam_exact_terms),
+            "english_level": str(english_level) if english_level else None,
+            "math_level": str(math_level) if math_level else None,
+            "majors": [value.strip() for value in majors],
         },
         "weekly_schedule": normalized_rows,
         "transit": {
@@ -288,6 +301,9 @@ def package_to_spec(package: dict[str, Any], public_id: str) -> dict[str, Any]:
         "selectors": shahaf["selectors"],
         "exam_terms": shahaf["exam_terms"],
         "exam_exact_terms": shahaf["exam_exact_terms"],
+        "english_level": shahaf.get("english_level"),
+        "math_level": shahaf.get("math_level"),
+        "majors": shahaf.get("majors", []),
         "transit": transit,
         "managed_profile": True,
     }
