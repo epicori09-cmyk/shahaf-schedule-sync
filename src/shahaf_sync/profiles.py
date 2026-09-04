@@ -128,7 +128,22 @@ def _exam_level_conflict(exam: Exam, subject: str, family: str) -> bool:
     return False
 
 
+def _exam_is_individual_cs_candidate(exam: Exam, family: str) -> bool:
+    """Reject Computer Science exams explicitly limited to individual students."""
+    if family != "computer-science":
+        return False
+    text = _text(" ".join((exam.title, exam.detail, exam.group)))
+    return any(term in text for term in ("בודדים", "בודד", "יחידים", "יחידני"))
+
+
+def _has_level_marker(value: str) -> bool:
+    text = _text(value)
+    return bool(re.search(r"\b[45]\s*יח", text)) or "מואץ" in text
+
+
 def _exam_specificity(exam: Exam, profile_lessons: list[object], family: str) -> int | None:
+    if _exam_is_individual_cs_candidate(exam, family):
+        return None
     matching_lessons = [
         lesson
         for lesson in profile_lessons
@@ -141,6 +156,16 @@ def _exam_specificity(exam: Exam, profile_lessons: list[object], family: str) ->
     normalized_teacher = _text(teacher)
     generic_groups = {"math": {"מתמטיקה"}, "english": {"אנגלית"}}
     is_generic = not teacher or normalized_teacher in generic_groups.get(family, set())
+    # A generic Math/English row cannot be assigned to a level-specific track
+    # when Shahaf did not publish the level. A named teacher or room is useful
+    # evidence and may still match a specific track.
+    if (
+        is_generic
+        and family in {"math", "english"}
+        and not _has_level_marker(exam.title)
+        and any(_has_level_marker(str(_value(lesson, "subject", ""))) for lesson in matching_lessons)
+    ):
+        return None
     teacher_match = any(
         _person_matches(teacher, str(_value(lesson, "teacher", "")))
         for lesson in matching_lessons

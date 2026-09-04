@@ -575,7 +575,11 @@ def _exam_subject(title: str) -> str | None:
     if "מתמטיקה" in normalized:
         if re.search(r"(?:4\s*יח|4\s*יח|4\s*units)", normalized):
             return None
-        return "מתמטיקה 5 יח״ל מואץ" if "מואץ" in normalized or "5" not in normalized else "מתמטיקה 5 יח״ל"
+        if "מואץ" in normalized:
+            return "מתמטיקה 5 יח״ל מואץ"
+        if "5" in normalized:
+            return "מתמטיקה 5 יח״ל"
+        return "מתמטיקה"
     if "אנגלית" in normalized:
         if re.search(r"(?:4\s*יח|4\s*units)", normalized):
             return None

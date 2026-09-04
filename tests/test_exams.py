@@ -49,7 +49,7 @@ class ExamTests(unittest.TestCase):
         self.assertEqual(
             [(item.date, item.subject, item.start_period, item.end_period) for item in snapshot.exams],
             [
-                (date(2026, 9, 6), "מתמטיקה 5 יח״ל מואץ", 4, 6),
+                (date(2026, 9, 6), "מתמטיקה", 4, 6),
                 (date(2026, 9, 10), "מדעי המחשב 1", 7, 9),
                 (date(2026, 9, 12), "אנגלית 5 יח״ל מואץ", 1, 3),
             ],
