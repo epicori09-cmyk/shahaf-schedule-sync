@@ -132,12 +132,21 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
-            self.assertIn("Full schedule", html)
+            self.assertIn(">Schedule<", html)
             self.assertIn("schedule-periods", html)
             self.assertIn("Free period", html)
+            self.assertIn('data-empty-kind=', html)
+            self.assertIn('"no-lesson"', html)
+            self.assertIn('"gap"', html)
+            self.assertIn("Heebo-400.ttf", html)
             self.assertIn('touchstart', html)
             self.assertIn('touchend', html)
             self.assertIn('Math.abs(dx)', html)
+            self.assertIn('attachSwipe(document.querySelector(".topbar"), "views")', html)
+            self.assertIn('attachSwipe(document.querySelector(".view-switch"), "views")', html)
+            self.assertIn('attachSwipe(document.getElementById("full-day-surface"), "days")', html)
+            self.assertNotIn("Last successful sync:", html)
+            self.assertNotIn('id="source-link"', html)
             self.assertNotIn('settings-view', html)
             self.assertNotIn('profile-select', html)
             self.assertIn('skeleton', html)
@@ -172,6 +181,9 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertTrue((output / "sw.js").exists())
             for size in (180, 192, 512):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
+            self.assertIn("fonts/Heebo-400.ttf", (output / "sw.js").read_text(encoding="utf-8"))
+            self.assertIn("-v2", (output / "sw.js").read_text(encoding="utf-8"))
 
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:
         with TemporaryDirectory() as directory:
@@ -183,12 +195,13 @@ class GithubAndSiteTests(unittest.TestCase):
                 source_updated="fresh",
                 changes=[],
                 stale=False,
-                exams=[Exam(date(2026, 9, 6), "מתמטיקה 5 יח״ל מואץ", 4, 6)],
+                exams=[Exam(date(2026, 9, 6), "מתמטיקה 5 יח״ל מואץ", 4, 6, room="217")],
             )
             html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
             self.assertIn("Exams", html)
-            self.assertIn("4 days before", html)
+            self.assertIn("exam-room", html)
+            self.assertNotIn("Reminder: 4 days before", html)
             self.assertEqual(data["exams"][0]["reminder_date"], "2026-09-02")
             self.assertTrue(data["exams_available"])
 
