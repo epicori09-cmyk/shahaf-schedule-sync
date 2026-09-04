@@ -144,7 +144,9 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('Math.abs(dx)', html)
             self.assertIn('attachSwipe(document.querySelector(".topbar"), "views")', html)
             self.assertIn('attachSwipe(document.querySelector(".view-switch"), "views")', html)
-            self.assertIn('attachSwipe(document.getElementById("full-day-surface"), "days")', html)
+            self.assertIn('attachSwipe(document.getElementById("full-day-content"), "days")', html)
+            self.assertIn('attachSwipe(document.getElementById("day-picker"), "views")', html)
+            self.assertIn('attachSwipe(document.getElementById("now-view"), "views")', html)
             self.assertNotIn("Last successful sync:", html)
             self.assertNotIn('id="source-link"', html)
             self.assertNotIn('settings-view', html)
@@ -204,6 +206,44 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertNotIn("Reminder: 4 days before", html)
             self.assertEqual(data["exams"][0]["reminder_date"], "2026-09-02")
             self.assertTrue(data["exams_available"])
+
+    def test_async_school_day_remains_selectable_with_notice(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-04T14:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                schedule=[
+                    {
+                        "date": "2026-09-08",
+                        "period": 1,
+                        "subject": "עברית",
+                        "teacher": "מורה",
+                        "room": "208",
+                        "start": "08:30",
+                        "end": "09:10",
+                    }
+                ],
+                events=[
+                    {
+                        "date": "2026-09-09",
+                        "title": "יום למידה א-סינכרוני",
+                        "detail": "אין לימודים פרונטליים",
+                        "classification": "no_school",
+                    }
+                ],
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertIn('id="day-notice"', html)
+            self.assertIn('function asyncEventFor', html)
+            self.assertIn('events.filter(isAsyncDayEvent)', html)
+            self.assertIn("Async learning day", html)
+            self.assertEqual(data["events"][0]["date"], "2026-09-09")
 
     def test_site_keeps_event_data_for_safety_but_hides_events_view(self) -> None:
         with TemporaryDirectory() as directory:
