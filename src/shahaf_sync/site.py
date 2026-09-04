@@ -671,7 +671,7 @@ html[dir="rtl"] .identity,html[dir="rtl"] .source,html[dir="rtl"] .view-switch,h
 <section id="full-view" class="full-schedule" hidden aria-labelledby="full-title"><div class="schedule-heading"><div><p class="eyebrow">Every period</p><h2 id="full-title">Schedule</h2></div><button id="back-to-now" class="small-button" type="button">Back to now</button></div><div id="full-day-surface" class="day-surface"><div id="day-picker" class="day-picker" role="listbox" aria-label="Choose a school day"></div><div id="full-day-content" class="day-content"><div id="day-notice" class="day-notice" role="status" hidden></div><div class="selected-day"><div><h3 id="selected-day-title">Loading…</h3><p id="selected-day-summary"></p></div><button id="jump-today" class="small-button" type="button">Today</button></div><div id="schedule-periods" class="period-list"></div></div></div></section>
  {exams_html}
  {changes_html}
-<footer class="footer"><a id="footer-source-link" href="itms-apps://itunes.apple.com/app/id1368425766" rel="noreferrer">Open Shahaf app ↗</a></footer>
+<footer class="footer"><a id="footer-source-link" href="shfmobile://" rel="noreferrer">Open Shahaf app ↗</a></footer>
 </main><script>
 const uiTranslations = {ui_translations_json};
 const uiLocale = shahafIsHebrew ? "he-IL" : "en-US";
@@ -687,7 +687,21 @@ setUiText("#current-subject", "checking"); setUiText("#next-subject", "checking"
 const lessonKickers = document.querySelectorAll(".lesson-kicker"); if (lessonKickers[0]) lessonKickers[0].textContent = tr("now"); if (lessonKickers[1]) lessonKickers[1].textContent = tr("nextUp");
 setUiText("#full-title", "fullSchedule"); setUiText(".schedule-heading .eyebrow", "everyPeriod"); setUiText("#back-to-now", "backToNow"); setUiText("#jump-today", "today");
 const dayPicker = document.getElementById("day-picker"); if (dayPicker) dayPicker.setAttribute("aria-label", tr("chooseSchoolDay"));
-const footerSource = document.getElementById("footer-source-link"); if (footerSource) {{ footerSource.textContent = tr("openShahaf") + " ↗"; footerSource.setAttribute("aria-label", tr("openShahaf")); }}
+const footerSource = document.getElementById("footer-source-link");
+const shahafAppUrl = "shfmobile://";
+const shahafStoreUrl = "itms-apps://itunes.apple.com/app/id1368425766";
+const openShahafApp = (event) => {{
+  event.preventDefault();
+  const isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!isAppleMobile) {{ window.location.href = shahafStoreUrl; return; }}
+  let handedOff = false;
+  const fallback = window.setTimeout(() => {{ if (!handedOff && !document.hidden) window.location.href = shahafStoreUrl; }}, 1800);
+  const onVisibilityChange = () => {{ if (!document.hidden) return; handedOff = true; window.clearTimeout(fallback); document.removeEventListener("visibilitychange", onVisibilityChange); }};
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.setTimeout(() => document.removeEventListener("visibilitychange", onVisibilityChange), 2200);
+  window.location.href = shahafAppUrl;
+}};
+if (footerSource) {{ footerSource.textContent = tr("openShahaf") + " ↗"; footerSource.setAttribute("aria-label", tr("openShahaf")); footerSource.addEventListener("click", openShahafApp); }}
 if (shahafIsHebrew) document.title = tr("mySchedule");
  const activeProfile = {primary_profile_json};
  const periods = {periods_json};

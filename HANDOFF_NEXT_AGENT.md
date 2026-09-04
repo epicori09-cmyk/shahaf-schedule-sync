@@ -160,13 +160,17 @@ Mizrahnut, and other majors. Do not loosen selectors into whole-grade matches.
 ### Shahaf app link
 
 The footer label is localized as `Open Shahaf app` / `פתיחת אפליקציית שחף`.
-The current URL is the iOS app-store scheme:
+The current launcher tries the student app's inferred iOS scheme first:
+
+`shfmobile://`
+
+If iOS does not hand the page off to the installed app, the launcher falls
+back after a short delay to the official app listing:
 
 `itms-apps://itunes.apple.com/app/id1368425766`
 
-This was selected because a verified private in-app Shahaf deep-link scheme
-was not available. It opens the official app listing/launch path on iOS; do
-not claim that a hidden app deep link has been proven.
+The app-first scheme is inferred from the iOS bundle identifier
+`com.shahaf-soft.shfmobile`; it still needs confirmation on a physical iPhone.
 
 ## Alarm systems
 
@@ -443,8 +447,8 @@ user explicitly authorizes it.
 - Real iPhone swipe behavior has not been directly automated in the final
   browser QA; it needs a physical-device check.
 - Scheduled GTFS does not know real-time bus delays, cancellations, or traffic.
-- The Shahaf app link is the verified App Store scheme, not a proven private
-  in-app deep link.
+- The Shahaf app-first scheme still needs confirmation on a physical iPhone;
+  unsupported devices fall back to the App Store listing.
 - Public random profile URLs are private by obscurity, not authenticated. Anyone
   who obtains one can view that profile's public schedule.
 - The Worker dashboard is intentionally English and simple; public student
@@ -464,4 +468,3 @@ user explicitly authorizes it.
 the documentation commit was `70d45c1`; root יא-2, legacy `/ya1/`, and managed
 student profiles are separate. I will first check `git status`, the latest
 workflow run, and the live endpoints before making any changes.”
-
