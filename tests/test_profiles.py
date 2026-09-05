@@ -46,6 +46,23 @@ class ProfileTests(unittest.TestCase):
         selected = select_changes(changes, spec)
         self.assertEqual(selected, changes)
 
+    def test_teacher_only_change_matches_a_shared_lesson_by_teacher_identity(self) -> None:
+        lessons = [
+            Lesson(date(2026, 9, 6), 2, time(9, 10), time(9, 50), "חינוך גופני", "יונתן דנישבסקי", "")
+        ]
+        changes = [
+            PublishedChange(
+                date(2026, 9, 6),
+                2,
+                "",
+                "cancelled",
+                teacher="דנישבסקי יונתן",
+            )
+        ]
+        spec = {"shared_subjects": ["חינוך גופני"]}
+        selected = select_changes(changes, spec, lessons=lessons)
+        self.assertEqual(selected, changes)
+
     def test_selects_confirmed_tracks_and_shared_lessons_only(self) -> None:
         lessons = [
             Lesson(date(2026, 9, 10), 1, time(8, 30), time(9, 10), "פיסיקה 1", "שגיא גיא", "308 מע׳ פיסיקה"),
