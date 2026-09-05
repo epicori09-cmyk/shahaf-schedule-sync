@@ -203,7 +203,8 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('id="alarm-restore"', html)
             self.assertIn("Restore my alarm", html)
             self.assertIn("public/profiles/student-profile/alarm-command", html)
-            self.assertIn("This changes only this schedule’s next alarm", html)
+            self.assertNotIn('class="alarm-help"', html)
+            self.assertNotIn('id="alarm-self-service-status"', html)
             for size in (180, 192, 512):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())

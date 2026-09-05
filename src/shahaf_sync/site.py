@@ -645,7 +645,7 @@ def render_site(
     changes_html = '''<section class="changes" id="changes-view" aria-labelledby="changes-title"><div class="section-title"><h2 id="changes-title" data-i18n="changes">Changes</h2><span id="changes-count">0</span></div><div class="change-list" id="change-list"></div></section>'''
 
     transit_html = '''<section class="transit-wake-card" id="transit-wake-card" aria-labelledby="transit-title"><div class="section-title"><h2 id="transit-title" data-i18n="busPlan">Bus plan</h2><span id="transit-status">Checking</span></div><div id="transit-summary" class="transit-summary" data-i18n="checkingRoute">Checking the safest scheduled route…</div><div id="transit-legs" class="transit-legs"></div><p class="transit-note" data-i18n="earlierBuses">Earlier buses were considered; this is the latest scheduled departure that still arrives safely.</p><a id="transit-map" class="transit-map" href="#" target="_blank" rel="noreferrer" data-i18n="verifyRoute">Verify route in Google Maps ↗</a></section>''' if profile_id == "ya1" else ""
-    alarm_html = '''<section class="alarm-self-service" id="alarm-self-service" aria-labelledby="alarm-self-service-title"><div class="section-title"><h2 id="alarm-self-service-title" data-i18n="alarmTitle">My alarm</h2></div><button id="alarm-self-service-toggle" class="small-button" type="button" aria-expanded="false" aria-controls="alarm-self-service-panel" data-i18n="alarmButton">Cancel / move my next alarm</button><div id="alarm-self-service-panel" class="alarm-panel" hidden><p class="alarm-help" data-i18n="alarmInstruction">This changes only this schedule’s next alarm. It will be applied after the next sync.</p><div class="alarm-actions"><button id="alarm-cancel-today" class="alarm-action alarm-action-danger" type="button" data-i18n="cancelTodayAlarm">Cancel my next alarm</button><div class="alarm-time-row"><label for="alarm-move-time" data-i18n="moveAlarmTo">Move my next alarm to</label><input id="alarm-move-time" type="time" inputmode="numeric" step="60"><button id="alarm-move-today" class="alarm-action" type="button" data-i18n="moveAlarm">Move alarm</button></div><button id="alarm-restore" class="alarm-action" type="button" data-i18n="restoreAlarm">Restore my alarm</button></div><button id="alarm-keep-current" class="small-button" type="button" data-i18n="keepAlarm">Keep current alarm</button></div><p id="alarm-self-service-status" class="alarm-status" role="status" aria-live="polite"></p></section>''' if public_profile else ""
+    alarm_html = '''<section class="alarm-self-service" id="alarm-self-service" aria-labelledby="alarm-self-service-title"><div class="section-title"><h2 id="alarm-self-service-title" data-i18n="alarmTitle">My alarm</h2></div><button id="alarm-self-service-toggle" class="small-button" type="button" aria-expanded="false" aria-controls="alarm-self-service-panel" data-i18n="alarmButton">Cancel / move my next alarm</button><div id="alarm-self-service-panel" class="alarm-panel" hidden><div class="alarm-actions"><button id="alarm-cancel-today" class="alarm-action alarm-action-danger" type="button" data-i18n="cancelTodayAlarm">Cancel my next alarm</button><div class="alarm-time-row"><label for="alarm-move-time" data-i18n="moveAlarmTo">Move my next alarm to</label><input id="alarm-move-time" type="time" inputmode="numeric" step="60"><button id="alarm-move-today" class="alarm-action" type="button" data-i18n="moveAlarm">Move alarm</button></div><button id="alarm-restore" class="alarm-action" type="button" data-i18n="restoreAlarm">Restore my alarm</button></div><button id="alarm-keep-current" class="small-button" type="button" data-i18n="keepAlarm">Keep current alarm</button></div></section>''' if public_profile else ""
 
     gate_html = '''<section id="site-access-gate" class="site-access-gate" aria-labelledby="gate-title"><div class="gate-card"><p class="eyebrow" data-i18n="privatePage">Private page</p><h1 id="gate-title" data-i18n="enterYa1Schedule">Enter Ya1 schedule</h1><p data-i18n="typePhrase">Type the access phrase to continue.</p><form id="gate-form"><label for="gate-phrase" data-i18n="accessPhrase">Access phrase</label><input id="gate-phrase" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" dir="auto" required><button type="submit" data-i18n="enter">Enter</button><p id="gate-error" role="alert" aria-live="polite"></p></form></div></section>''' if profile_id == "ya1" else ""
     gate_css = '''.site-locked .app{display:none}.site-access-gate{display:grid;place-items:center;min-height:100vh;padding:24px}.site-access-gate[hidden]{display:none}.gate-card{width:min(100%,420px);padding:25px 22px;border:1px solid var(--line);border-radius:22px;background:var(--card);box-shadow:var(--shadow)}.gate-card h1{font-size:34px;margin:8px 0}.gate-card>p:not(.eyebrow){color:var(--muted);font-size:14px}.gate-card label{display:block;margin:20px 0 7px;font-size:12px;font-weight:750}.gate-card input{width:100%;height:47px;padding:0 13px;border:1px solid var(--line);border-radius:12px;background:var(--paper);color:var(--ink);font:inherit}.gate-card button{width:100%;height:47px;margin-top:11px;border:0;border-radius:12px;background:var(--ink);color:#fff;font:inherit;font-weight:800;cursor:pointer}.gate-card #gate-error{min-height:18px;margin:9px 0 0;color:var(--red);font-size:12px}''' if profile_id == "ya1" else ""
@@ -829,15 +829,15 @@ function installAlarmSelfService() {{
     const messageKey = action === "clear" ? "alarmCancelQueued" : action === "restore" ? "alarmRestoreQueued" : "alarmMoveQueued";
     if (action === "set") payload.wake_time = time.value;
     setBusy(true);
-    status.textContent = tr("alarmSaving");
+    if (status) status.textContent = tr("alarmSaving");
     try {{
       const response = await fetch(publicAlarmEndpoint, {{ method: "POST", mode: "cors", headers: {{ "content-type": "application/json" }}, body: JSON.stringify(payload) }});
       const body = await response.json().catch(() => ({{}}));
       if (!response.ok) throw new Error(body.error || tr("alarmError"));
-      status.textContent = tr(messageKey);
+      if (status) status.textContent = tr(messageKey);
       close();
     }} catch (error) {{
-      status.textContent = error.message || tr("alarmError");
+      if (status) status.textContent = error.message || tr("alarmError");
     }} finally {{
       setBusy(false);
     }}
@@ -852,7 +852,7 @@ function installAlarmSelfService() {{
   cancel.addEventListener("click", () => {{ if (window.confirm(tr("alarmConfirmCancel"))) submit("clear"); }});
   restore.addEventListener("click", () => {{ if (window.confirm(tr("alarmConfirmRestore"))) submit("restore"); }});
   move.addEventListener("click", () => {{
-    if (!time.value) {{ status.textContent = tr("alarmFutureTime"); return; }}
+    if (!time.value) {{ if (status) status.textContent = tr("alarmFutureTime"); return; }}
     if (window.confirm(tr("alarmConfirmMove").replace("{{time}}", time.value))) submit("set");
   }});
 }}
