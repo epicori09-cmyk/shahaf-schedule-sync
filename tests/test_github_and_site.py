@@ -202,6 +202,8 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("Cancel / move my next alarm", html)
             self.assertIn('id="alarm-restore"', html)
             self.assertIn("Restore my alarm", html)
+            self.assertNotIn('id="alarm-keep-current"', html)
+            self.assertNotIn("Keep current alarm", html)
             self.assertIn("public/profiles/student-profile/alarm-command", html)
             self.assertNotIn('class="alarm-help"', html)
             self.assertNotIn('id="alarm-self-service-status"', html)
