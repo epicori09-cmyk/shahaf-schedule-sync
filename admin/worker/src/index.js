@@ -222,6 +222,9 @@ function originOK(request, env, required = false) {
 function publicSiteOrigin(env) {
   try { return new URL(String(env.PUBLIC_SITE_ORIGIN || "")).origin; } catch (_) { return ""; }
 }
+function publicSiteURL(env) {
+  try { return new URL(String(env.PUBLIC_SITE_ORIGIN || "")).href.replace(/\/$/, ""); } catch (_) { return ""; }
+}
 function publicOriginOK(request, env) {
   return Boolean(publicSiteOrigin(env)) && request.headers.get("Origin") === publicSiteOrigin(env);
 }
@@ -251,9 +254,6 @@ function israelDateAndMinutes(value = new Date()) {
     date: `${fields.year}-${fields.month}-${fields.day}`,
     minutes: Number(fields.hour) * 60 + Number(fields.minute),
   };
-}
-function israelIsWeekend(value = new Date()) {
-  return new Set(["Fri", "Sat"]).has(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", weekday: "short" }).format(value));
 }
 function israelOffset(targetDate) {
   const noon = new Date(`${targetDate}T12:00:00Z`);
@@ -524,6 +524,33 @@ function validTargetDate(value) {
   const fields = Object.fromEntries(parts.filter((part) => ["year", "month", "day"].includes(part.type)).map((part) => [part.type, part.value]));
   return `${fields.year}-${fields.month}-${fields.day}` === value;
 }
+function israelIsWeekendDate(targetDate) {
+  if (!validTargetDate(targetDate)) return false;
+  const instant = new Date(`${targetDate}T12:00:00${israelOffset(targetDate)}`);
+  return new Set(["Fri", "Sat"]).has(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", weekday: "short" }).format(instant));
+}
+async function nextPublicAlarmDate(env, publicId) {
+  const origin = publicSiteURL(env);
+  if (!origin) return null;
+  let response;
+  try {
+    const cacheBust = encodeURIComponent(crypto.randomUUID());
+    response = await fetch(`${origin}/students/${encodeURIComponent(publicId)}/wake.json?alarm-target=${cacheBust}`, {
+      headers: { Accept: "application/json", "User-Agent": "shahaf-profile-alarm" },
+    });
+  } catch (_) {
+    return null;
+  }
+  if (!response.ok) return null;
+  const payload = await response.json().catch(() => null);
+  const today = israelDateAndMinutes().date;
+  const nextScheduledDate = typeof payload?.next_scheduled_school_day === "string" ? payload.next_scheduled_school_day : "";
+  if (validTargetDate(nextScheduledDate) && nextScheduledDate > today) return nextScheduledDate;
+  // Keep older published JSON safe during the Pages rollout: if it does not
+  // have the explicit future-day field, never fall back to today's alarm.
+  const currentTarget = typeof payload?.next_school_day === "string" ? payload.next_school_day : "";
+  return validTargetDate(currentTarget) && currentTarget > today ? currentTarget : null;
+}
 
 function validateAlarmCommand(body) {
   const action = String(body?.action || "");
@@ -695,26 +722,28 @@ export default {
       const action = String(body?.action || "");
       if (!["clear", "set"].includes(action)) return json({ error: "action must be clear or set" }, 400, cors);
       const today = israelDateAndMinutes();
+      const targetDate = await nextPublicAlarmDate(env, publicId);
+      if (!targetDate) return json({ error: "No upcoming alarm is available right now." }, 503, cors);
       let wakeAt = null;
       let wakeTime = null;
       if (action === "set") {
-        if (israelIsWeekend()) return json({ error: "No alarm can be moved on Friday or Saturday." }, 400, cors);
+        if (israelIsWeekendDate(targetDate)) return json({ error: "The next alarm date cannot be Friday or Saturday." }, 400, cors);
         wakeTime = String(body?.wake_time || "");
         if (!validClock(wakeTime, false)) return json({ error: "wake_time must use HH:MM" }, 400, cors);
-        if (Number(wakeTime.slice(0, 2)) * 60 + Number(wakeTime.slice(3)) <= today.minutes) {
-          return json({ error: "choose a future time today" }, 400, cors);
+        if (targetDate === today.date && Number(wakeTime.slice(0, 2)) * 60 + Number(wakeTime.slice(3)) <= today.minutes) {
+          return json({ error: "choose a future time for the next alarm" }, 400, cors);
         }
-        wakeAt = `${today.date}T${wakeTime}:00${israelOffset(today.date)}`;
+        wakeAt = `${targetDate}T${wakeTime}:00${israelOffset(targetDate)}`;
       }
       const timestamp = now();
       const id = crypto.randomUUID();
       await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at) VALUES(?1, ?2, ?3, ?4, ?5, NULL, 0, ?6, ?7, ?8) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=NULL, force=0, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, published_at=NULL, consumed_at=NULL")
-        .bind(id, row.id, today.date, action, wakeAt, "Student self-service alarm change", timestamp, overrideExpiry(today.date)).run();
-      await writeAudit(env, row.id, `alarm-command-${action}`, { target_date: today.date, wake_time: wakeTime, source: "public-profile" }, "student");
+        .bind(id, row.id, targetDate, action, wakeAt, "Student self-service alarm change", timestamp, overrideExpiry(targetDate)).run();
+      await writeAudit(env, row.id, `alarm-command-${action}`, { target_date: targetDate, wake_time: wakeTime, source: "public-profile" }, "student");
       try { await triggerPublish(env, row.id); } catch (_) {
         return json({ error: "Your alarm change was saved, but publishing is temporarily unavailable." }, 503, cors);
       }
-      return json({ status: "queued", action, target_date: today.date }, 202, { ...cors, "cache-control": "no-store" });
+      return json({ status: "queued", action, target_date: targetDate }, 202, { ...cors, "cache-control": "no-store" });
     }
     const check = await auth(request, env, csrfRequired(request)); if (check.error) return check.error;
     if (url.pathname === "/api/classes" && request.method === "GET") {

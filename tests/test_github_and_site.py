@@ -199,9 +199,9 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertTrue((output / "sw.js").exists())
             self.assertEqual((output / "header-logo.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertIn('id="alarm-self-service"', html)
-            self.assertIn("Cancel / move my alarm for today", html)
+            self.assertIn("Cancel / move my next alarm", html)
             self.assertIn("public/profiles/student-profile/alarm-command", html)
-            self.assertIn("This changes only this schedule’s alarm for today", html)
+            self.assertIn("This changes only this schedule’s next alarm", html)
             for size in (180, 192, 512):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
@@ -497,6 +497,21 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertTrue(wake["alarm_for_today"])
         self.assertEqual(wake["fallback_status"], "none")
         self.assertEqual(wake["shortcut_action"], "set")
+
+    def test_wake_data_exposes_the_next_school_day_for_alarm_controls(self) -> None:
+        wake = build_wake_data(
+            [
+                {"date": "2026-09-03", "period": 1, "start": "08:30", "subject": "Today"},
+                {"date": "2026-09-04", "period": 1, "start": "08:30", "subject": "Friday"},
+                {"date": "2026-09-05", "period": 1, "start": "08:30", "subject": "Saturday"},
+                {"date": "2026-09-06", "period": 0, "start": "07:45", "subject": "Sunday"},
+            ],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["next_school_day"], "2026-09-03")
+        self.assertEqual(wake["next_scheduled_school_day"], "2026-09-06")
 
     def test_ori_special_request_wakes_at_0645_for_a_0745_start(self) -> None:
         wake = build_wake_data(

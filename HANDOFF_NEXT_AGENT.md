@@ -338,14 +338,18 @@ obscurity, not real authentication.
 ### Public per-student alarm control
 
 Every active managed `/students/<random-id>/` page now renders a
-**Cancel / move my alarm for today** control at the bottom of its Now tab.
+**Cancel / move my next alarm** control at the bottom of its Now tab.
 The control opens an explicit cancel-or-move choice and confirmation. It calls
 `POST /public/profiles/<random-id>/alarm-command` on the Worker, with only
 `{"action":"clear"}` or `{"action":"set","wake_time":"HH:MM"}`. The Worker
-requires the configured Pages origin, resolves the current date and time in
-`Asia/Jerusalem`, rejects past times and arbitrary dates, rate-limits requests,
-and updates only that public ID's `alarm_overrides` row. It does not expose the
-admin session or allow global/profile settings changes.
+requires the configured Pages origin, reads the profile's published `wake.json`,
+and derives the target from its validated `next_scheduled_school_day`. This
+means a click before today's alarm still targets the next scheduled school
+alarm; a Saturday click skips Saturday and targets Sunday (or the next
+available school day), not the current calendar date. It rejects past times
+only when the target is today, rejects weekend target dates, rate-limits
+requests, and updates only that public ID's `alarm_overrides` row. It does not
+expose the admin session or allow global/profile settings changes.
 
 The response is queued rather than an immediate phone mutation: a successful
 Pages sync publishes that profile's `wake.json`, and the existing Shahaf

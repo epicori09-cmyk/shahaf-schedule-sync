@@ -16,7 +16,7 @@ class AdminContractTests(unittest.TestCase):
             self.assertIn(import_control, source)
         for major in ("chemistry", "biology", "geography", "arabic", "social_sciences", "business_management", "communications_new_media", "french", "spanish", "russian", "art", "extended_history"):
             self.assertIn(f'value="{major}"', source)
-        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "Permanently delete this profile", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at", "action must be clear or set", "future time today", "No alarm can be moved on Friday or Saturday", "israelIsWeekend", "WHERE public_id=?1 AND active=1", "Student self-service alarm change", 'source: "public-profile"'):
+        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "Permanently delete this profile", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at", "action must be clear or set", "nextPublicAlarmDate", "next_scheduled_school_day", "next_school_day", "choose a future time for the next alarm", "The next alarm date cannot be Friday or Saturday.", "israelIsWeekendDate", "WHERE public_id=?1 AND active=1", "Student self-service alarm change", 'source: "public-profile"'):
             self.assertIn(control, source)
         self.assertIn("GITHUB_DISPATCH_TOKEN", source)
         self.assertNotIn("GIST_TOKEN", source)
