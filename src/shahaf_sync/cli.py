@@ -442,7 +442,7 @@ def _build_public_profile(
     update_text = update_text or changes_snapshot.update_text
     selected_changes = [
         item
-        for item in select_changes(changes_snapshot.changes, spec)
+        for item in select_changes(changes_snapshot.changes, spec, lessons=selected_lessons)
         if window_start <= item.date <= window_end
     ]
     selected_lessons = apply_changes(selected_lessons, selected_changes)

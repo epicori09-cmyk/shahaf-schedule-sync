@@ -237,6 +237,19 @@ def _change_matches(change: PublishedChange, spec: dict[str, Any]) -> bool:
     shared = {_text(str(value)) for value in spec.get("shared_subjects", [])}
     if change.subject and _text(change.subject) in shared:
         return True
+    # Some Shahaf rows describe a cancellation only by teacher and period.
+    # Use the profile's already-selected lesson at that exact occurrence to
+    # scope the change, including shared subjects with no selector entry.
+    lessons = spec.get("selected_lessons")
+    if not change.subject and change.teacher and isinstance(lessons, list):
+        if any(
+            isinstance(lesson, Lesson)
+            and lesson.date == change.date
+            and lesson.period == change.period
+            and _person_matches(change.teacher, lesson.teacher)
+            for lesson in lessons
+        ):
+            return True
     selectors = [item for item in spec.get("selectors", []) if isinstance(item, dict)]
     for selector in selectors:
         periods = selector.get("periods")
@@ -259,7 +272,15 @@ def _change_matches(change: PublishedChange, spec: dict[str, Any]) -> bool:
     return not change.subject and not change.teacher and not change.room
 
 
-def select_changes(changes: list[PublishedChange], spec: dict[str, Any]) -> list[PublishedChange]:
+def select_changes(
+    changes: list[PublishedChange],
+    spec: dict[str, Any],
+    *,
+    lessons: list[Lesson] | None = None,
+) -> list[PublishedChange]:
+    if lessons is not None:
+        spec = dict(spec)
+        spec["selected_lessons"] = lessons
     return [change for change in changes if _change_matches(change, spec)]
 
 
