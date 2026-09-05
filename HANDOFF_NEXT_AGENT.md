@@ -63,19 +63,30 @@ Source pages:
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
-The latest code commit before this documentation is `e84aa32`:
-`Recover legacy alarm restores from baseline` (following `3152351`, which
-showed the scheduled alarm time, `f89efa0`, which made Restore return to the
-correct original alarm time, `fb90b9d`, which removed the
+The latest code commit before this documentation is `b7defd9`:
+`Retire legacy YA1 and YA2 schedule outputs` (following `e84aa32`, which
+recovered legacy alarm restores from baseline, `3152351`, which showed the
+scheduled alarm time, `f89efa0`, which made Restore return to the correct
+original alarm time, `fb90b9d`, which removed the
 Keep-current alarm control, `f463fbd`, which removed the secondary alarm helper
 text, and `3579688`, which added the restore action).
 
-The last live Pages workflow verified in the chat was run `33984390014`,
-successful, for `e84aa32`. The Worker was deployed from the legacy-restore
+The last live Pages workflow verified in the chat was run `33986621891`,
+successful, for `b7defd9`. Its retirement guard passed before the artifact was
+uploaded: root `index.html`, root `data.json`, root `wake.json`, and `/ya1/`
+were absent. The Worker was deployed from the legacy-restore
 baseline code version `565fcb16-4a57-4873-a03c-8494cebcfd04`, with the public
 per-profile alarm endpoint targeting the next scheduled school day. A
 docs-only commit does not change the generated site, but this workflow remains
 the repository's deployment verification path.
+
+Live endpoint contract after `33986621891`: the four active randomized public
+IDs were each checked at their Pages schedule, Pages `data.json`, Pages
+`wake.json`, and Worker `wake.json` URLs. All returned HTTP 200, valid JSON,
+and matching action/time/target values. The IDs were
+`M6kVHL-2USY2FS-Z8NsaSw`, `d1yQtOSfobdzGs0XfzJlNw`,
+`f3zvTU6e3-VF7o-tH60MKw`, and `Z1_SNYeGELFxRHXa0FQ0mA`. The former root and
+all tested `/ya1/` paths returned HTTP 404 after deployment.
 
 The public managed `wake.json` now carries an alarm-only `alarm_baseline` beside
 the effective alarm state. It contains only schedule date/time and alarm
