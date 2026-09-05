@@ -129,8 +129,14 @@ async function getProfileAlarmSettings(env, profileId) {
 }
 
 async function getPendingAlarmOverride(env, profileId) {
-  const row = await env.DB.prepare("SELECT id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, published_at FROM alarm_overrides WHERE profile_id=?1 AND consumed_at IS NULL AND expires_at>=?2 ORDER BY created_at DESC LIMIT 1")
+  const row = await env.DB.prepare("SELECT id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND consumed_at IS NULL AND expires_at>=?2 ORDER BY created_at DESC LIMIT 1")
     .bind(profileId, now()).first();
+  return row || null;
+}
+
+async function getAlarmOverrideForTarget(env, profileId, targetDate) {
+  const row = await env.DB.prepare("SELECT id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND target_date=?2 AND consumed_at IS NULL AND expires_at>=?3 LIMIT 1")
+    .bind(profileId, targetDate, now()).first();
   return row || null;
 }
 
@@ -566,7 +572,7 @@ function applyPublicAlarmOverride(wake, override) {
   if (!override) return wake;
   const targetDate = String(override.target_date || "");
   const action = String(override.action || "");
-  if (!validTargetDate(targetDate) || targetDate !== String(wake.next_school_day || "") || !["clear", "set"].includes(action)) return wake;
+  if (!validTargetDate(targetDate) || targetDate !== String(wake.next_school_day || "") || !["clear", "set", "leave"].includes(action)) return wake;
   const unsafeStatuses = new Set(["stale", "unavailable", "no-safe-route", "wake-time-bound"]);
   if ((Boolean(wake.stale) || unsafeStatuses.has(String(wake.fallback_status || ""))) && !Boolean(override.force)) return wake;
   const result = {
@@ -577,6 +583,14 @@ function applyPublicAlarmOverride(wake, override) {
       override_pending: false,
     },
   };
+  const restoreSnapshot = normalizedAlarmRestoreSnapshot(override.restore_json, targetDate);
+  if (restoreSnapshot) {
+    const restored = { ...result };
+    for (const key of ["next_school_day", "wake_time", "wake_at", "subject", "enabled", "shortcut_action", "fallback_status", "alarm_for_today"]) {
+      if (Object.prototype.hasOwnProperty.call(restoreSnapshot, key)) restored[key] = restoreSnapshot[key];
+    }
+    return restored;
+  }
   if (action === "clear") {
     return {
       ...result,
@@ -603,6 +617,32 @@ function applyPublicAlarmOverride(wake, override) {
     shortcut_action: "set",
     fallback_status: "manual-set",
   };
+}
+
+function createAlarmRestoreSnapshot(wake, targetDate) {
+  if (!wake || typeof wake !== "object" || Array.isArray(wake) || String(wake.next_school_day || "") !== targetDate) return null;
+  const snapshot = {};
+  for (const key of ["next_school_day", "wake_time", "wake_at", "subject", "enabled", "shortcut_action", "fallback_status", "alarm_for_today", "stale"]) {
+    if (Object.prototype.hasOwnProperty.call(wake, key)) snapshot[key] = wake[key];
+  }
+  const serialized = JSON.stringify(snapshot);
+  return serialized.length <= 20000 ? serialized : null;
+}
+
+function normalizedAlarmRestoreSnapshot(value, targetDate) {
+  const snapshot = typeof value === "string" ? parseStoredJson(value, null) : value;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) || String(snapshot.next_school_day || "") !== targetDate) return null;
+  const unsafeStatuses = new Set(["stale", "unavailable", "no-safe-route", "wake-time-bound"]);
+  const action = String(snapshot.shortcut_action || "leave");
+  if (!["set", "clear", "leave"].includes(action) || Boolean(snapshot.stale) || unsafeStatuses.has(String(snapshot.fallback_status || ""))) return null;
+  if (action === "set" && (!snapshot.wake_at || Number.isNaN(new Date(String(snapshot.wake_at)).getTime()))) return null;
+  return snapshot;
+}
+
+async function alarmRestoreSnapshot(env, publicId, targetDate, existingOverride = null) {
+  const existing = normalizedAlarmRestoreSnapshot(existingOverride?.restore_json, targetDate);
+  if (existing) return JSON.stringify(existing);
+  return createAlarmRestoreSnapshot(await fetchPublicWake(env, publicId), targetDate);
 }
 
 function validateAlarmCommand(body) {
@@ -788,10 +828,30 @@ export default {
       if (!row) return json({ error: "profile not found" }, 404, cors);
       const body = await request.json().catch(() => ({}));
       const action = String(body?.action || "");
-      if (!["clear", "set"].includes(action)) return json({ error: "action must be clear or set" }, 400, cors);
+      if (!["clear", "set", "restore"].includes(action)) return json({ error: "action must be clear, set, or restore" }, 400, cors);
       const today = israelDateAndMinutes();
       const targetDate = await nextPublicAlarmDate(env, publicId);
       if (!targetDate) return json({ error: "No upcoming alarm is available right now." }, 503, cors);
+      const existingOverride = await getAlarmOverrideForTarget(env, row.id, targetDate);
+      if (action === "restore") {
+        if (!existingOverride) return json({ error: "There is no active alarm change to restore." }, 409, cors);
+        const restoreJson = await alarmRestoreSnapshot(env, publicId, targetDate, existingOverride);
+        const restoreSnapshot = normalizedAlarmRestoreSnapshot(restoreJson, targetDate);
+        const timestamp = now();
+        if (restoreSnapshot) {
+          const restoreAction = String(restoreSnapshot.shortcut_action || "leave");
+          const restoreWakeAt = restoreAction === "set" ? String(restoreSnapshot.wake_at) : null;
+          await env.DB.prepare("UPDATE alarm_overrides SET action=?1, wake_at=?2, subject=?3, force=0, reason=?4, created_at=?5, expires_at=?6, published_at=NULL, consumed_at=NULL, restore_json=?7 WHERE id=?8 AND profile_id=?9")
+            .bind(restoreAction, restoreWakeAt, restoreSnapshot.subject ? String(restoreSnapshot.subject).slice(0, 120) : null, "Student restored the previous alarm state", timestamp, overrideExpiry(targetDate), JSON.stringify(restoreSnapshot), existingOverride.id, row.id).run();
+        } else {
+          await env.DB.prepare("DELETE FROM alarm_overrides WHERE id=?1 AND profile_id=?2 AND consumed_at IS NULL").bind(existingOverride.id, row.id).run();
+        }
+        await writeAudit(env, row.id, "alarm-command-restore", { target_date: targetDate, immediate: Boolean(restoreSnapshot), source: "public-profile" }, "student");
+        try { await triggerPublish(env, row.id); } catch (_) {
+          return json({ error: "Your restore request was saved, but publishing is temporarily unavailable." }, 503, cors);
+        }
+        return json({ status: "queued", action, target_date: targetDate, immediate: Boolean(restoreSnapshot) }, 202, { ...cors, "cache-control": "no-store" });
+      }
       let wakeAt = null;
       let wakeTime = null;
       if (action === "set") {
@@ -805,8 +865,9 @@ export default {
       }
       const timestamp = now();
       const id = crypto.randomUUID();
-      await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at) VALUES(?1, ?2, ?3, ?4, ?5, NULL, 0, ?6, ?7, ?8) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=NULL, force=0, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, published_at=NULL, consumed_at=NULL")
-        .bind(id, row.id, targetDate, action, wakeAt, "Student self-service alarm change", timestamp, overrideExpiry(targetDate)).run();
+      const restoreJson = await alarmRestoreSnapshot(env, publicId, targetDate, existingOverride);
+      await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, restore_json) VALUES(?1, ?2, ?3, ?4, ?5, NULL, 0, ?6, ?7, ?8, ?9) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=NULL, force=0, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, published_at=NULL, consumed_at=NULL, restore_json=excluded.restore_json")
+        .bind(id, row.id, targetDate, action, wakeAt, "Student self-service alarm change", timestamp, overrideExpiry(targetDate), restoreJson).run();
       await writeAudit(env, row.id, `alarm-command-${action}`, { target_date: targetDate, wake_time: wakeTime, source: "public-profile" }, "student");
       try { await triggerPublish(env, row.id); } catch (_) {
         return json({ error: "Your alarm change was saved, but publishing is temporarily unavailable." }, 503, cors);
@@ -968,8 +1029,10 @@ export default {
       if (command.errors) return json({ error: command.errors.join("\n") }, 400);
       const timestamp = now();
       const id = crypto.randomUUID();
-      await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=excluded.subject, force=excluded.force, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, consumed_at=NULL")
-        .bind(id, row.id, command.targetDate, command.action, command.wakeAt, command.subject, command.force ? 1 : 0, command.reason, timestamp, overrideExpiry(command.targetDate)).run();
+      const existingOverride = await getAlarmOverrideForTarget(env, row.id, command.targetDate);
+      const restoreJson = await alarmRestoreSnapshot(env, row.public_id, command.targetDate, existingOverride);
+      await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, restore_json) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=excluded.subject, force=excluded.force, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, restore_json=excluded.restore_json, consumed_at=NULL")
+        .bind(id, row.id, command.targetDate, command.action, command.wakeAt, command.subject, command.force ? 1 : 0, command.reason, timestamp, overrideExpiry(command.targetDate), restoreJson).run();
       await writeAudit(env, row.id, `alarm-command-${command.action}`, { target_date: command.targetDate, force: command.force, reason: command.reason });
       try { await triggerPublish(env, row.id); } catch (error) { return json({ error: `Command saved but publish failed: ${error.message}` }, 502); }
       return json({ ...(await alarmProfilePayload(env, row.id)), status: "queued", command_id: id });
@@ -1007,7 +1070,9 @@ export default {
           await env.DB.prepare("DELETE FROM alarm_profile_settings WHERE profile_id=?1").bind(row.id).run();
         } else {
           const id = crypto.randomUUID();
-          await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=excluded.subject, force=excluded.force, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, consumed_at=NULL").bind(id, row.id, command.targetDate, command.action, command.wakeAt, command.subject, command.force ? 1 : 0, command.reason, timestamp, overrideExpiry(command.targetDate)).run();
+          const existingOverride = await getAlarmOverrideForTarget(env, row.id, command.targetDate);
+          const restoreJson = await alarmRestoreSnapshot(env, row.public_id, command.targetDate, existingOverride);
+          await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, restore_json) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=excluded.subject, force=excluded.force, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, restore_json=excluded.restore_json, consumed_at=NULL").bind(id, row.id, command.targetDate, command.action, command.wakeAt, command.subject, command.force ? 1 : 0, command.reason, timestamp, overrideExpiry(command.targetDate), restoreJson).run();
         }
         await writeAudit(env, row.id, `bulk-${action}`, { target_date: command?.targetDate || null, force: command?.force || false, reason: command?.reason || "" });
       }

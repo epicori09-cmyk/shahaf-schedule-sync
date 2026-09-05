@@ -16,18 +16,21 @@ class AdminContractTests(unittest.TestCase):
             self.assertIn(import_control, source)
         for major in ("chemistry", "biology", "geography", "arabic", "social_sciences", "business_management", "communications_new_media", "french", "spanish", "russian", "art", "extended_history"):
             self.assertIn(f'value="{major}"', source)
-        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "workerSiteURL", "Permanently delete this profile", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at", "action must be clear or set", "nextPublicAlarmDate", "next_scheduled_school_day", "next_school_day", "choose a future time for the next alarm", "The next alarm date cannot be Friday or Saturday.", "israelIsWeekendDate", "public-alarm-feed", "alarm feed rate limit reached", "WHERE public_id=?1 AND active=1", "Student self-service alarm change", 'source: "public-profile"'):
+        for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "workerSiteURL", "Permanently delete this profile", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at", "restore_json", "action must be clear, set, or restore", "alarm-command-restore", "nextPublicAlarmDate", "next_scheduled_school_day", "next_school_day", "choose a future time for the next alarm", "The next alarm date cannot be Friday or Saturday.", "israelIsWeekendDate", "public-alarm-feed", "alarm feed rate limit reached", "WHERE public_id=?1 AND active=1", "Student self-service alarm change", 'source: "public-profile"'):
             self.assertIn(control, source)
         self.assertIn("GITHUB_DISPATCH_TOKEN", source)
         self.assertNotIn("GIST_TOKEN", source)
         self.assertNotIn("dashboardEnhancements + alarmDashboardEnhancements", source)
         schema = (ROOT / "admin" / "worker" / "schema.sql").read_text(encoding="utf-8")
         migration = (ROOT / "admin" / "worker" / "migrations" / "0002_alarm_controls.sql").read_text(encoding="utf-8")
+        restore_migration = (ROOT / "admin" / "worker" / "migrations" / "0003_alarm_restore.sql").read_text(encoding="utf-8")
         for table in ("alarm_global_settings", "alarm_profile_settings", "alarm_settings_history", "alarm_overrides", "alarm_audit"):
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", schema)
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
         self.assertIn("published_at TEXT", schema)
         self.assertIn("published_at TEXT", migration)
+        self.assertIn("restore_json TEXT", schema)
+        self.assertIn("ALTER TABLE alarm_overrides ADD COLUMN restore_json TEXT", restore_migration)
 
     def test_workflow_fetches_profiles_without_committing_them_and_skips_failed_deploy(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "sync.yml").read_text(encoding="utf-8")

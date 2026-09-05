@@ -8,6 +8,7 @@ private Worker and publish only the small, safe subset needed by Shortcuts.
 """
 
 from datetime import datetime, time, timezone
+import json
 import math
 from typing import Any, Mapping
 
@@ -211,6 +212,29 @@ def apply_alarm_controls(
     }
 
     if override_matches_day:
+        restore_snapshot = override.get("restore_json")
+        if isinstance(restore_snapshot, str):
+            try:
+                restore_snapshot = json.loads(restore_snapshot)
+            except json.JSONDecodeError:
+                restore_snapshot = None
+        if isinstance(restore_snapshot, Mapping) and restore_snapshot.get("next_school_day") == result.get("next_school_day"):
+            restore_action = str(restore_snapshot.get("shortcut_action") or "leave")
+            unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}
+            restore_unsafe = bool(restore_snapshot.get("stale")) or str(restore_snapshot.get("fallback_status") or "") in unsafe_statuses
+            restore_valid = restore_action in {"set", "clear", "leave"}
+            if restore_action == "set":
+                try:
+                    restore_valid = restore_valid and datetime.fromisoformat(str(restore_snapshot.get("wake_at", "")).replace("Z", "+00:00")) is not None
+                except ValueError:
+                    restore_valid = False
+            if restore_valid and not restore_unsafe:
+                for key in ("next_school_day", "wake_time", "wake_at", "subject", "enabled", "shortcut_action", "fallback_status", "alarm_for_today"):
+                    if key in restore_snapshot:
+                        result[key] = restore_snapshot[key]
+                result["alarm_control"]["override_active"] = True
+                result["alarm_control"]["override_pending"] = False
+                return result
         action = str(override.get("action") or "leave")
         target_date = override.get("target_date")
         unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}

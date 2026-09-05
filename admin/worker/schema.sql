@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS alarm_overrides (
   expires_at TEXT NOT NULL,
   published_at TEXT,
   consumed_at TEXT,
+  restore_json TEXT,
   UNIQUE (profile_id, target_date)
 );
 

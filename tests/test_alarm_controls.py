@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+import json
 import unittest
 
 from shahaf_sync.alarm_controls import (
@@ -138,6 +139,44 @@ class AlarmControlTests(unittest.TestCase):
         self.assertEqual(result["shortcut_action"], "set")
         self.assertFalse(result["alarm_control"]["override_active"])
         self.assertTrue(result["alarm_control"]["override_pending"])
+
+    def test_restore_snapshot_returns_alarm_to_state_before_cancellation(self) -> None:
+        result = apply_alarm_controls(
+            {
+                "next_school_day": "2026-09-06",
+                "wake_time": None,
+                "wake_at": None,
+                "subject": None,
+                "enabled": False,
+                "shortcut_action": "clear",
+                "fallback_status": "manual-clear",
+            },
+            resolve_alarm_settings({}, {}, "profile-1"),
+            override={
+                "target_date": "2026-09-06",
+                "action": "clear",
+                "restore_json": json.dumps(
+                    {
+                        "next_school_day": "2026-09-06",
+                        "wake_time": "06:45",
+                        "wake_at": "2026-09-06T06:45:00+03:00",
+                        "subject": "First lesson",
+                        "enabled": True,
+                        "shortcut_action": "set",
+                        "fallback_status": "none",
+                        "alarm_for_today": False,
+                    }
+                ),
+                "expires_at": "2026-09-06T20:59:59Z",
+            },
+            now=datetime(2026, 9, 5, 5, 0, tzinfo=ISRAEL),
+        )
+        self.assertEqual(result["wake_time"], "06:45")
+        self.assertEqual(result["wake_at"], "2026-09-06T06:45:00+03:00")
+        self.assertEqual(result["subject"], "First lesson")
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["shortcut_action"], "set")
+        self.assertTrue(result["alarm_control"]["override_active"])
 
 
 if __name__ == "__main__":

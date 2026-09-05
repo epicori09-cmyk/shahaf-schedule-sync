@@ -200,6 +200,8 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual((output / "header-logo.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertIn('id="alarm-self-service"', html)
             self.assertIn("Cancel / move my next alarm", html)
+            self.assertIn('id="alarm-restore"', html)
+            self.assertIn("Restore my alarm", html)
             self.assertIn("public/profiles/student-profile/alarm-command", html)
             self.assertIn("This changes only this schedule’s next alarm", html)
             for size in (180, 192, 512):
