@@ -232,8 +232,47 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             service_worker = (output / "sw.js").read_text(encoding="utf-8")
             self.assertIn('"./data.json"', service_worker)
-            self.assertIn('CACHE_NAME = "shahaf-schedule-student-profile-v4"', service_worker)
+            self.assertIn('CACHE_NAME = "shahaf-schedule-student-profile-v5"', service_worker)
             self.assertIn("cache.put(request, response.clone())", service_worker)
+
+    def test_service_worker_preserves_other_students_caches(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(
+                output,
+                title="Schedule",
+                generated_at="2026-09-05T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                profile_id="student-profile",
+            )
+            service_worker = (output / "sw.js").read_text(encoding="utf-8")
+            self.assertIn('CACHE_PREFIX = "shahaf-schedule-student-profile-"', service_worker)
+            self.assertIn("key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME", service_worker)
+            self.assertNotIn("keys.filter((key) => key !== CACHE_NAME)", service_worker)
+
+    def test_page_registers_worker_early_and_defers_large_header_logo(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(
+                output,
+                title="Student schedule",
+                generated_at="2026-09-05T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                profile_id="student-profile",
+                public_profile=True,
+            )
+            html = (output / "index.html").read_text(encoding="utf-8")
+            service_worker = (output / "sw.js").read_text(encoding="utf-8")
+            self.assertIn('decoding="async" fetchpriority="low"', html)
+            self.assertIn('navigator.serviceWorker.register("./sw.js")', html)
+            self.assertNotIn('window.addEventListener("load", () => navigator.serviceWorker.register', html)
+            self.assertNotIn('"./header-logo.png"', service_worker)
 
     def test_service_worker_serves_cached_page_before_network_refresh(self) -> None:
         with TemporaryDirectory() as directory:
@@ -314,7 +353,7 @@ class GithubAndSiteTests(unittest.TestCase):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
             self.assertIn("fonts/Heebo-400.ttf", (output / "sw.js").read_text(encoding="utf-8"))
-            self.assertIn("-v4", (output / "sw.js").read_text(encoding="utf-8"))
+            self.assertIn("-v5", (output / "sw.js").read_text(encoding="utf-8"))
             self.assertIn('"./header-logo.png"', (output / "sw.js").read_text(encoding="utf-8"))
 
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:
