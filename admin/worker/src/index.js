@@ -225,6 +225,9 @@ function publicSiteOrigin(env) {
 function publicSiteURL(env) {
   try { return new URL(String(env.PUBLIC_SITE_ORIGIN || "")).href.replace(/\/$/, ""); } catch (_) { return ""; }
 }
+function workerSiteURL(env) {
+  try { return new URL(String(env.ADMIN_ORIGIN || "")).origin; } catch (_) { return ""; }
+}
 function publicOriginOK(request, env) {
   return Boolean(publicSiteOrigin(env)) && request.headers.get("Origin") === publicSiteOrigin(env);
 }
@@ -387,8 +390,9 @@ async function triggerPublish(env, profileId) {
 
 const adminHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Shahaf profile admin</title><style>body{font:16px system-ui;max-width:900px;margin:auto;padding:24px;background:#f6f5f2;color:#252329}main{background:white;border:1px solid #ddd6d0;border-radius:20px;padding:24px}textarea,input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #cfc7bf;border-radius:10px;font:inherit}textarea{min-height:300px;font-family:ui-monospace,monospace}button{padding:11px 16px;border:0;border-radius:10px;background:#292535;color:white;font-weight:700;cursor:pointer;margin:8px 5px 8px 0}.muted{color:#6c6570}.error{color:#a32035;white-space:pre-wrap}.profile{padding:15px 0;border-top:1px solid #eee}.hidden{display:none}code{word-break:break-all}</style></head><body><main><h1>Shahaf profile admin</h1><p class="muted">Private operator console. Names stay in D1 and are never published.</p><section id="login"><input id="password" type="password" placeholder="Admin passphrase"><button id="loginBtn">Log in</button><p id="loginMsg" class="error"></p></section><section id="app" class="hidden"><button id="logoutBtn">Log out</button><h2>Import profile</h2><label>Admin-only student name<input id="studentName" placeholder="Optional only if package already names the student"></label><p><input id="file" type="file" accept=".json,application/json"><button id="loadFile">Load JSON file</button></p><textarea id="payload" placeholder="Paste the complete GPT JSON package here"></textarea><button id="importBtn">Validate and publish</button><pre id="result" class="error"></pre><h2>Profiles</h2><div id="profiles">Loading…</div></section></main><script>let csrf="";const $=function(id){return document.getElementById(id)};async function api(path,options){options=options||{};const headers=Object.assign({"content-type":"application/json"},options.headers||{});if(csrf)headers["X-CSRF-Token"]=csrf;const r=await fetch(path,Object.assign({credentials:"include"},options,{headers:headers}));const body=await r.json().catch(function(){return {}});if(!r.ok)throw new Error(body.error||("HTTP "+r.status));return body}function show(msg){$("result").textContent=msg}async function refresh(){try{const data=await api("/api/profiles",{method:"GET"});$("profiles").innerHTML=data.profiles.map(function(p){return '<div class="profile"><strong>'+p.name+'</strong> <span class="muted">'+(p.active?"active":"disabled")+'</span><br>Public ID: <code>'+p.public_id+'</code><br><a href="'+p.page_url+'" target="_blank">Schedule</a> · <a href="'+p.wake_url+'" target="_blank">wake.json</a><br>Alarm label: <code>'+p.alarm_label+'</code><br><button data-disable="'+p.id+'" '+(p.active?"":"disabled")+'>Disable</button></div>'}).join("")||"No profiles yet";document.querySelectorAll("[data-disable]").forEach(function(b){b.onclick=async function(){if(confirm("Disable this profile?")){await api("/api/profiles/"+b.dataset.disable+"/disable",{method:"POST",body:"{}"});refresh()}}})}catch(e){$("profiles").textContent=e.message}}$("loginBtn").onclick=async function(){try{const r=await fetch("/api/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({password:$("password").value})});const b=await r.json();if(!r.ok)throw new Error(b.error||"Login failed");csrf=b.csrf;$("login").classList.add("hidden");$("app").classList.remove("hidden");refresh()}catch(e){$("loginMsg").textContent=e.message}};$("logoutBtn").onclick=async function(){await api("/api/logout",{method:"POST",body:"{}"});location.reload()};$("loadFile").onclick=function(){const f=$("file").files[0];if(!f)return;const reader=new FileReader();reader.onload=function(){$("payload").value=reader.result};reader.readAsText(f)};$("importBtn").onclick=async function(){try{const package=JSON.parse($("payload").value);const name=$("studentName").value.trim();const result=await api("/api/profiles/import",{method:"POST",body:JSON.stringify({name:name,package:package})});show("Queued "+result.public_id+"\\n"+result.page_url+"\\n"+result.wake_url+"\\nAlarm: "+result.alarm_label);refresh()}catch(e){show(e.message)}};</script></body></html>`;
 
-function profileView(row, origin) {
+function profileView(row, origin, shortcutOrigin) {
   const wakeUrl = `${origin}/students/${row.public_id}/wake.json`;
+  const shortcutUrl = shortcutOrigin ? `${shortcutOrigin}/public/profiles/${row.public_id}/wake.json` : wakeUrl;
   let packageData = {};
   try { packageData = JSON.parse(row.package_json || "{}"); } catch (_) { packageData = {}; }
   const transit = packageData.transit || {};
@@ -398,7 +402,7 @@ function profileView(row, origin) {
     active: Boolean(row.active),
     page_url: `${origin}/students/${row.public_id}/`,
     wake_url: wakeUrl,
-    shortcut_url: wakeUrl,
+    shortcut_url: shortcutUrl,
     alarm_label: "Shahaf",
     transit_enabled: Boolean(transit.enabled),
     transit_address: transit.origin_address || "",
@@ -470,8 +474,9 @@ async function alarmAdminProfile(env, row, globalSettings) {
 
 async function dashboardData(env) {
   const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, "");
+  const shortcutOrigin = workerSiteURL(env);
   const rows = await env.DB.prepare("SELECT id, public_id, name, package_json, active, created_at, updated_at, last_publish_status, last_publish_url FROM profiles ORDER BY created_at DESC").all();
-  const profiles = rows.results.map((row) => profileView(row, origin));
+  const profiles = rows.results.map((row) => profileView(row, origin, shortcutOrigin));
   const globalAlarm = await getGlobalAlarmSettings(env);
   const alarmProfiles = await Promise.all(rows.results.map(async (row) => ({
     ...(await alarmAdminProfile(env, row, globalAlarm.settings)),
@@ -530,6 +535,17 @@ function israelIsWeekendDate(targetDate) {
   return new Set(["Fri", "Sat"]).has(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", weekday: "short" }).format(instant));
 }
 async function nextPublicAlarmDate(env, publicId) {
+  const payload = await fetchPublicWake(env, publicId);
+  if (!payload) return null;
+  const today = israelDateAndMinutes().date;
+  const nextScheduledDate = typeof payload.next_scheduled_school_day === "string" ? payload.next_scheduled_school_day : "";
+  if (validTargetDate(nextScheduledDate) && nextScheduledDate > today) return nextScheduledDate;
+  // Keep older published JSON safe during the Pages rollout: if it does not
+  // have the explicit future-day field, never fall back to today's alarm.
+  const currentTarget = typeof payload.next_school_day === "string" ? payload.next_school_day : "";
+  return validTargetDate(currentTarget) && currentTarget > today ? currentTarget : null;
+}
+async function fetchPublicWake(env, publicId) {
   const origin = publicSiteURL(env);
   if (!origin) return null;
   let response;
@@ -543,13 +559,49 @@ async function nextPublicAlarmDate(env, publicId) {
   }
   if (!response.ok) return null;
   const payload = await response.json().catch(() => null);
-  const today = israelDateAndMinutes().date;
-  const nextScheduledDate = typeof payload?.next_scheduled_school_day === "string" ? payload.next_scheduled_school_day : "";
-  if (validTargetDate(nextScheduledDate) && nextScheduledDate > today) return nextScheduledDate;
-  // Keep older published JSON safe during the Pages rollout: if it does not
-  // have the explicit future-day field, never fall back to today's alarm.
-  const currentTarget = typeof payload?.next_school_day === "string" ? payload.next_school_day : "";
-  return validTargetDate(currentTarget) && currentTarget > today ? currentTarget : null;
+  return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+}
+function applyPublicAlarmOverride(wake, override) {
+  if (!override) return wake;
+  const targetDate = String(override.target_date || "");
+  const action = String(override.action || "");
+  if (!validTargetDate(targetDate) || targetDate !== String(wake.next_school_day || "") || !["clear", "set"].includes(action)) return wake;
+  const unsafeStatuses = new Set(["stale", "unavailable", "no-safe-route", "wake-time-bound"]);
+  if ((Boolean(wake.stale) || unsafeStatuses.has(String(wake.fallback_status || ""))) && !Boolean(override.force)) return wake;
+  const result = {
+    ...wake,
+    alarm_control: {
+      ...(wake.alarm_control && typeof wake.alarm_control === "object" ? wake.alarm_control : {}),
+      override_active: true,
+      override_pending: false,
+    },
+  };
+  if (action === "clear") {
+    return {
+      ...result,
+      wake_time: null,
+      wake_at: null,
+      subject: null,
+      enabled: false,
+      shortcut_action: "clear",
+      fallback_status: "manual-clear",
+    };
+  }
+  const wakeAt = String(override.wake_at || "");
+  const parsed = new Date(wakeAt);
+  if (Number.isNaN(parsed.getTime())) return wake;
+  const local = israelDateAndMinutes(parsed);
+  if (local.date !== targetDate) return wake;
+  const wakeTime = `${String(Math.floor(local.minutes / 60)).padStart(2, "0")}:${String(local.minutes % 60).padStart(2, "0")}`;
+  return {
+    ...result,
+    wake_time: wakeTime,
+    wake_at: parsed.toISOString(),
+    subject: wake.subject || null,
+    enabled: true,
+    shortcut_action: "set",
+    fallback_status: "manual-set",
+  };
 }
 
 function validateAlarmCommand(body) {
@@ -704,6 +756,21 @@ export default {
         acknowledged += Number(result.meta?.changes || 0);
       }
       return json({ acknowledged });
+    }
+    const publicWakeEndpoint = url.pathname.match(/^\/public\/profiles\/([^/]+)\/wake\.json$/);
+    if (publicWakeEndpoint) {
+      if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+      let publicId = "";
+      try { publicId = decodeURIComponent(publicWakeEndpoint[1]); } catch (_) { return json({ error: "invalid profile" }, 400); }
+      if (!/^[A-Za-z0-9_-]{8,80}$/.test(publicId)) return json({ error: "invalid profile" }, 400);
+      const requestKey = await hash(`${request.headers.get("CF-Connecting-IP") || "unknown"}:${publicId}`);
+      if (!(await rateLimit(env, `public-alarm-feed:${requestKey}`, 60, 3600))) return json({ error: "alarm feed rate limit reached" }, 429);
+      const row = await env.DB.prepare("SELECT id, public_id FROM profiles WHERE public_id=?1 AND active=1").bind(publicId).first();
+      if (!row) return json({ error: "profile not found" }, 404);
+      const wake = await fetchPublicWake(env, publicId);
+      if (!wake) return json({ error: "alarm data is temporarily unavailable" }, 503, { "cache-control": "no-store" });
+      const override = await getPendingAlarmOverride(env, row.id);
+      return json(applyPublicAlarmOverride(wake, override), 200, { "cache-control": "no-store" });
     }
     const publicAlarmCommand = url.pathname.match(/^\/public\/profiles\/([^/]+)\/alarm-command$/);
     if (publicAlarmCommand) {
@@ -949,7 +1016,7 @@ export default {
     if (url.pathname === "/api/profiles" && request.method === "GET") {
       const rows = await env.DB.prepare("SELECT id, public_id, name, package_json, active, created_at, updated_at, last_publish_status, last_publish_url FROM profiles ORDER BY created_at DESC").all();
       const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, "");
-      return json({ profiles: rows.results.map((row) => profileView(row, origin)) });
+      return json({ profiles: rows.results.map((row) => profileView(row, origin, workerSiteURL(env))) });
     }
     const match = url.pathname.match(/^\/api\/profiles\/([^/]+)$/);
     if (match && request.method === "GET") {
@@ -973,7 +1040,7 @@ export default {
       const id = existing?.id || crypto.randomUUID(); const publicId = existing?.public_id || randomToken(16); const timestamp = now();
       await env.DB.prepare("INSERT INTO profiles(id, public_id, name, package_json, active, created_at, updated_at, last_publish_status) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?5, 'queued') ON CONFLICT(id) DO UPDATE SET package_json=excluded.package_json, active=1, updated_at=excluded.updated_at, last_publish_status='queued'").bind(id, publicId, name, JSON.stringify(checked.package), timestamp).run();
       try { await triggerPublish(env, id); } catch (error) { await env.DB.prepare("UPDATE profiles SET last_publish_status='publish_failed', updated_at=?1 WHERE id=?2").bind(now(), id).run(); return json({ error: `Profile saved but publish failed: ${error.message}` }, 502); }
-      const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, ""); const wakeUrl = `${origin}/students/${publicId}/wake.json`; return json({ id, public_id: publicId, page_url: `${origin}/students/${publicId}/`, wake_url: wakeUrl, shortcut_url: wakeUrl, alarm_label: "Shahaf", warnings: checked.warnings || [], status: "queued" });
+      const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, ""); const wakeUrl = `${origin}/students/${publicId}/wake.json`; const shortcutUrl = `${workerSiteURL(env)}/public/profiles/${publicId}/wake.json`; return json({ id, public_id: publicId, page_url: `${origin}/students/${publicId}/`, wake_url: wakeUrl, shortcut_url: shortcutUrl, alarm_label: "Shahaf", warnings: checked.warnings || [], status: "queued" });
     }
     if (match && request.method === "PATCH") {
       if (!(await rateLimit(env, `publish:${await hash(cookie(request, "__Host-shahaf_session"))}`, 20, 3600))) return json({ error: "publish rate limit reached" }, 429);

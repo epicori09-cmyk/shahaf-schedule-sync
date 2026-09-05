@@ -55,10 +55,12 @@ a confirmed `clear` or `set` time for
 that target date; a `set` is checked against the current time only when the
 target is today. The Worker looks up the profile from the URL before writing
 its single `alarm_overrides` row. It cannot change another profile, choose a
-future date, or change global settings. The response is queued: the next Pages
-sync updates that profile's `wake.json`, and the student's existing Shahaf
-Shortcut must run before the iPhone alarm changes. Friday and Saturday target
-dates remain protected by the normal no-weekend alarm logic.
+future date, or change global settings. The response saves the override and
+triggers the normal Pages sync in the background. The fast Worker Shortcut
+feed can read the matching override immediately, so the student's Shortcut can
+apply the iPhone change without waiting for Pages; the Pages `wake.json` is
+reconciled afterward. Friday and Saturday target dates remain protected by the
+normal no-weekend alarm logic.
 
 The dashboard supports preview, bulk pause/resume/reset/set/clear/leave
 commands, per-profile settings, expiring date overrides, audit history, and
@@ -96,13 +98,15 @@ The console displays:
 
 `https://<pages>/students/<random-id>/`
 
-`https://<pages>/students/<random-id>/wake.json`
+`https://<worker>/public/profiles/<random-id>/wake.json`
 
-and the alarm label `Shahaf`. The import
-result also labels the wake URL as the **Shortcut URL**; paste that exact URL
-into the student's `Get Contents of URL` action. Each profile therefore gets
-its own Shortcut endpoint and alarm label. Configure the reviewed Shortcut
-template with those values; the `.shortcut` file is not generated server-side.
+and the alarm label `Shahaf`. The import result still provides the Pages wake
+URL for the public schedule; for the fast alarm Shortcut, paste the Worker URL
+above into the student's `Get Contents of URL` action. That endpoint reads the
+published Pages payload and applies an active alarm override immediately.
+Each profile therefore gets its own Shortcut endpoint and alarm label.
+Configure the reviewed Shortcut template with those values; the `.shortcut`
+file is not generated server-side.
 
 The GitHub workflow remains the only publisher. A failed Worker dispatch or
 failed sync does not replace the last published student page. The workflow

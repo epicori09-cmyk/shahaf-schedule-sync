@@ -20,8 +20,12 @@ flow, not a generated or inferred shortcut:
 9. **Create Alarm** for that date/time with label `Shahaf`.
 
 The configured student URL is intentionally not copied into this log because
-the public ID is the access path for that student's page. The live template is
-`https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/<random-id>/wake.json`.
+the public ID is the access path for that student's page. The fast Shortcut
+feed template is
+`https://shahaf-profile-admin.trading-api-9de14d.workers.dev/public/profiles/<random-id>/wake.json`.
+It reads the published schedule from Pages and applies that profile's active
+audited alarm override immediately; the normal Pages wake URL remains the
+public schedule endpoint.
 
 ### Endpoint compatibility note
 
@@ -38,9 +42,9 @@ response has no school on the current weekend, the default `clear` action
 removes only the app's exact labeled alarm; stale or uncertain responses still
 return `leave` so an existing alarm is preserved.
 
-The current Ori endpoint is:
+The current Ori Shortcut endpoint is:
 
-`https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/wake.json`
+`https://shahaf-profile-admin.trading-api-9de14d.workers.dev/public/profiles/d1yQtOSfobdzGs0XfzJlNw/wake.json`
 
 It is the randomly generated managed profile for Ori's יא-2 schedule. The
 former root endpoint is archived and should no longer be used.
@@ -57,7 +61,7 @@ In the Shortcuts app, create a shortcut named **Refresh School Wake Alarm**.
 Add these actions in order:
 
 1. **Get Contents of URL**
-   - URL: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/wake.json`
+   - URL: `https://shahaf-profile-admin.trading-api-9de14d.workers.dev/public/profiles/d1yQtOSfobdzGs0XfzJlNw/wake.json`
    - Method: `GET`
 2. **Get Dictionary from Input**.
 3. **Get Dictionary Value** for `shortcut_action` (using the Dictionary output

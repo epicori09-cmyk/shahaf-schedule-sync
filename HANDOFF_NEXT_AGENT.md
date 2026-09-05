@@ -186,6 +186,12 @@ core fields include the next valid school day, first confirmed lesson,
 calculated wake time, subject, `enabled`, `stale`, `fallback_status`, and
 plain-text `shortcut_action`.
 
+For fast manual alarm changes, the Shortcut should fetch the Worker endpoint:
+`https://shahaf-profile-admin.trading-api-9de14d.workers.dev/public/profiles/d1yQtOSfobdzGs0XfzJlNw/wake.json`.
+It reads the published Pages payload and applies Ori's active audited override
+without waiting for the full Pages rebuild. The Pages wake URL remains the
+public schedule endpoint and the background sync still republishes it.
+
 The reviewed iPhone Shortcut is documented in `SHORTCUT.md` and is named
 `Refresh School Wake Alarm`. Its exact main alarm label is:
 
@@ -193,7 +199,7 @@ The reviewed iPhone Shortcut is documented in `SHORTCUT.md` and is named
 
 Its intended logic is:
 
-1. Fetch Ori's random managed `wake.json`.
+1. Fetch Ori's random managed Worker `wake.json` endpoint above.
 2. Convert the URL contents to a Dictionary.
 3. Read `shortcut_action` from the original Dictionary.
 4. If it is `leave`, stop before touching alarms.
@@ -234,7 +240,8 @@ Spotify, jailbreaks, and Apple Developer membership are not required.
 ### Managed profile alarms
 
 Worker-managed students receive public `students/<random-id>/wake.json`
-payloads and an admin-generated public ID. The default managed label returned by
+schedule payloads and a Worker Shortcut endpoint at
+`/public/profiles/<random-id>/wake.json`, plus an admin-generated public ID. The default managed label returned by
 the current import flow is `Shahaf`; the legacy labels above are different and
 must not be accidentally substituted.
 
@@ -352,10 +359,10 @@ only when the target is today, rejects weekend target dates, rate-limits
 requests, and updates only that public ID's `alarm_overrides` row. It does not
 expose the admin session or allow global/profile settings changes.
 
-The response is queued rather than an immediate phone mutation: a successful
-Pages sync publishes that profile's `wake.json`, and the existing Shahaf
-Shortcut must fetch it before the iPhone Clock alarm changes. Friday and
-Saturday still produce no alarms through the normal schedule guard. The
+The response saves the override and triggers a Pages sync in the background.
+When the Shortcut uses the Worker feed documented above, it can fetch and
+apply the matching override immediately; the Pages `wake.json` is reconciled
+afterward. Friday and Saturday still produce no alarms through the normal schedule guard. The
 control is intentionally absent from the archived root and the separate Ya-1
 page, because those are not managed random student profiles.
 
