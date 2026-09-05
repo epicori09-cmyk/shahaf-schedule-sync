@@ -232,8 +232,45 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             service_worker = (output / "sw.js").read_text(encoding="utf-8")
             self.assertIn('"./data.json"', service_worker)
-            self.assertIn('CACHE_NAME = "shahaf-schedule-student-profile-v3"', service_worker)
+            self.assertIn('CACHE_NAME = "shahaf-schedule-student-profile-v4"', service_worker)
             self.assertIn("cache.put(request, response.clone())", service_worker)
+
+    def test_service_worker_serves_cached_page_before_network_refresh(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(
+                output,
+                title="Schedule",
+                generated_at="2026-09-05T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                profile_id="student-profile",
+            )
+            service_worker = (output / "sw.js").read_text(encoding="utf-8")
+            self.assertIn('const cached = await cache.match("./index.html")', service_worker)
+            self.assertIn('event.waitUntil(refreshNavigation(request, cache))', service_worker)
+            self.assertIn('if (cached) return cached', service_worker)
+
+    def test_page_refreshes_schedule_data_after_first_paint(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(
+                output,
+                title="Student schedule",
+                generated_at="2026-09-05T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                profile_id="student-profile",
+                public_profile=True,
+            )
+            html = (output / "index.html").read_text(encoding="utf-8")
+            self.assertIn("refreshDataInBackground", html)
+            self.assertIn('fetch(`./data.json?refresh=${Date.now()}`, {cache:"no-store"})', html)
+            self.assertIn('window.setTimeout(refreshDataInBackground, 0)', html)
 
     def test_every_rendered_page_has_installable_pwa_branding(self) -> None:
         with TemporaryDirectory() as directory:
