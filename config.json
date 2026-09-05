@@ -8,6 +8,11 @@
   "lookahead_days": 21,
   "site_title": "Shahaf Schedule Changes — Ostrovsky Grade 11-2",
   "site_dir": "site",
+  "special_requests": {
+    "wake_time_by_first_lesson_start": {
+      "07:45": "06:45"
+    }
+  },
   "transit": {
     "enabled": true,
     "gtfs_url": "https://gtfs.mot.gov.il/gtfsfiles/israel-public-transportation.zip",

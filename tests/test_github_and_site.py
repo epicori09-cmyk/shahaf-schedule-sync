@@ -493,6 +493,18 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertEqual(wake["fallback_status"], "none")
         self.assertEqual(wake["shortcut_action"], "set")
 
+    def test_ori_special_request_wakes_at_0645_for_a_0745_start(self) -> None:
+        wake = build_wake_data(
+            [{"date": "2026-09-06", "period": 0, "start": "07:45", "subject": "First lesson"}],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 5, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+            wake_time_by_first_lesson_start={"07:45": "06:45"},
+        )
+        self.assertEqual(wake["wake_time"], "06:45")
+        self.assertEqual(wake["wake_at"], "2026-09-06T06:45:00+03:00")
+        self.assertEqual(wake["shortcut_action"], "set")
+
     def test_wake_data_sets_a_future_alarm_for_tomorrow(self) -> None:
         wake = build_wake_data(
             [{"date": "2026-09-06", "period": 1, "start": "08:30", "subject": "Math"}],

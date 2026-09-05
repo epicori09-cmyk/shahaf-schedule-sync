@@ -22,6 +22,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(config.additional_profiles[0]["class_id"], "61")
         self.assertEqual(config.transit["origin_address"], "מרדכי זעירא 5, רעננה")
         self.assertEqual(config.transit["destination_address"], "אוסטרובסקי 26, רעננה")
+        self.assertEqual(config.special_requests["wake_time_by_first_lesson_start"]["07:45"], "06:45")
 
     def test_main_failure_payload_cannot_touch_the_master_alarm(self) -> None:
         config = load_config(Path("config.json"))

@@ -48,6 +48,7 @@ class Config:
     class_number: int = 2
     additional_profiles: tuple[dict[str, object], ...] = ()
     transit: dict[str, object] | None = None
+    special_requests: dict[str, object] | None = None
 
 
 def load_config(path: Path) -> Config:
@@ -59,11 +60,15 @@ def load_config(path: Path) -> Config:
     profiles = data.get("additional_profiles", [])
     if not isinstance(profiles, list) or not all(isinstance(item, dict) for item in profiles):
         raise SyncFailure("additional_profiles must be a list of objects")
+    special_requests = data.get("special_requests", {})
+    if not isinstance(special_requests, dict):
+        raise SyncFailure("special_requests must be an object")
     return Config(
         *(data[key] for key in required),
         int(data.get("class_number", 2)),
         tuple(profiles),
         data.get("transit") if isinstance(data.get("transit"), dict) else None,
+        special_requests,
     )
 
 
@@ -628,6 +633,12 @@ def execute(
             schedule_available=True,
             stale=False,
             now=current,
+            wake_time_by_first_lesson_start=(
+                config.special_requests.get("wake_time_by_first_lesson_start")
+                if isinstance(config.special_requests, dict)
+                and isinstance(config.special_requests.get("wake_time_by_first_lesson_start"), dict)
+                else None
+            ),
         )
         alarm_safety, alarm_safety_reason = _alarm_safety(
             wake=candidate_wake,
@@ -797,6 +808,12 @@ def execute(
             now=current,
             alarm_safety=alarm_safety,
             alarm_safety_reason=alarm_safety_reason,
+            wake_time_by_first_lesson_start=(
+                config.special_requests.get("wake_time_by_first_lesson_start")
+                if isinstance(config.special_requests, dict)
+                and isinstance(config.special_requests.get("wake_time_by_first_lesson_start"), dict)
+                else None
+            ),
         )
         for profile in profile_views:
             profile_spec = profile_specs_by_id.get(str(profile.get("id")), {})

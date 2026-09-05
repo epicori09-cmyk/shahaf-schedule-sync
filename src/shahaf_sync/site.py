@@ -303,6 +303,7 @@ def build_wake_data(
     no_lessons_policy: str = "clear",
     stale_policy: str = "leave",
     fallback_wake_time: str = "07:15",
+    wake_time_by_first_lesson_start: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the safe, master-profile-only input for the iPhone Shortcut."""
 
@@ -383,7 +384,21 @@ def build_wake_data(
     for school_day in sorted(by_date):
         first = min(by_date[school_day], key=lambda item: (item["start"], item.get("period", 0)))
         first_start = time.fromisoformat(str(first["start"]))
-        wake_naive = datetime.combine(school_day, first_start) - timedelta(minutes=buffer_minutes)
+        special_wake_time = None
+        if wake_time_by_first_lesson_start:
+            configured = wake_time_by_first_lesson_start.get(first_start.strftime("%H:%M"))
+            if configured:
+                try:
+                    parsed_special = time.fromisoformat(str(configured))
+                except ValueError:
+                    parsed_special = None
+                if parsed_special is not None and parsed_special < first_start:
+                    special_wake_time = parsed_special
+        wake_naive = (
+            datetime.combine(school_day, special_wake_time)
+            if special_wake_time is not None
+            else datetime.combine(school_day, first_start) - timedelta(minutes=buffer_minutes)
+        )
         if round_to_minutes > 1:
             rounded_minutes = (wake_naive.hour * 60 + wake_naive.minute) // round_to_minutes * round_to_minutes
             wake_naive = wake_naive.replace(hour=rounded_minutes // 60, minute=rounded_minutes % 60, second=0, microsecond=0)
@@ -451,6 +466,7 @@ def render_site(
     transit_wake: dict[str, Any] | None = None,
     alarm_settings: dict[str, Any] | None = None,
     alarm_override: dict[str, Any] | None = None,
+    wake_time_by_first_lesson_start: dict[str, str] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     is_pink = profile_id == "ya1" or public_profile
@@ -525,6 +541,7 @@ def render_site(
             no_lessons_policy=str((alarm_settings or {}).get("no_lessons_policy", "clear")),
             stale_policy=str((alarm_settings or {}).get("stale_policy", "leave")),
             fallback_wake_time=str((alarm_settings or {}).get("fallback_wake_time", "07:15")),
+            wake_time_by_first_lesson_start=wake_time_by_first_lesson_start,
         )
         if public_profile:
             if safe_transit_wake is not None:
