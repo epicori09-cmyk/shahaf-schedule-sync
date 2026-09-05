@@ -66,26 +66,29 @@ Source pages:
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
-The latest code commit before this documentation is `fb90b9d`:
-`Restore correct original alarm time` (following `fb90b9d`, which removed the
+The latest code commit before this documentation is `3152351`:
+`Show scheduled alarm time on student page` (following `f89efa0`, which made
+Restore return to the correct original alarm time, `fb90b9d`, which removed the
 Keep-current alarm control, `f463fbd`, which removed the secondary alarm helper
 text, and `3579688`, which added the restore action).
 
-The last live Pages workflow verified in the chat was run `33982430111`,
-successful, for `fb90b9d`. The Worker was deployed from the alarm-control code
-version `6c200a65-a25c-415f-aec8-0fd697f48913`, with the public per-profile
-alarm endpoint targeting the next scheduled school day. A docs-only commit
-does not change the generated site, but this workflow remains the repository's
-deployment verification path.
+The last live Pages workflow verified in the chat was run `33983791072`,
+successful, for `3152351`. The Worker was deployed from the scheduled-alarm
+display code version `48680a50-d063-4505-b5e5-b35627893e77`, with the public
+per-profile alarm endpoint targeting the next scheduled school day. A
+docs-only commit does not change the generated site, but this workflow remains
+the repository's deployment verification path.
 
 The final live visual QA covered Nitai's active profile
 `Z1_SNYeGELFxRHXa0FQ0mA` in both `?lang=he` and `?lang=en`. Now, Schedule, and
 Exams were opened in each language; Schedule day selection and return-to-Now
-were also exercised. The alarm panel showed Cancel, Move, and Restore only,
-with no visible helper/status copy or Keep-current control. No mutating alarm
-action was pressed. There is no committed screenshot baseline, so formal
-baseline comparison remains an INCONCLUSIVE boundary even though the live
-visual inspection was clean.
+were also exercised. The alarm panel showed the scheduled time (`07:15` in
+Hebrew and `7:15 AM` in English), then Cancel, Move, and Restore only, with no
+visible helper/status copy or Keep-current control. Schedule period numerals
+and time ranges were also visually isolated correctly, and Exams showed the
+expected real exams. No mutating alarm action was pressed. There is no
+committed screenshot baseline, so formal baseline comparison remains an
+INCONCLUSIVE boundary even though the live visual inspection was clean.
 
 ## What is live now
 
