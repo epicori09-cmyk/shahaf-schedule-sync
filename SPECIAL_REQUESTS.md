@@ -7,7 +7,7 @@ additive to the general architecture and safety rules in
 ## Ori / random managed יא-2 profile wake alarm
 
 - Scope: Ori's canonical random managed profile only. Do not apply this rule to
-  Ya1 or to other managed student profiles.
+  other managed student profiles.
 - Current verified profile ID: `d1yQtOSfobdzGs0XfzJlNw`.
 - When Ori's first confirmed lesson starts at **07:45**, the wake alarm must
   be **06:45** Israel time.
@@ -16,9 +16,19 @@ additive to the general architecture and safety rules in
   is added).
 - The configured rule lives in `config.json` under
   `special_requests.wake_time_by_first_lesson_start`.
-- The former root profile is archived after the canonical managed profile is
-  found. Its old `data.json` and `wake.json` are not published; the root page
-  only redirects to the random profile.
+- The former root YA2 profile is retired. Its old `index.html`, `data.json`,
+  and `wake.json` are removed from every generated Pages artifact and the root
+  is not redirected.
+
+## Retired legacy schedules
+
+- The YA1 schedule and transit endpoint under `/ya1/` were removed from the
+  config and publication pipeline.
+- The legacy root YA2 schedule was removed from the publication pipeline.
+- Both retired paths must remain absent from new Pages artifacts and should
+  return HTTP 404 after deployment.
+- Randomized managed student profiles under `/students/<public-id>/` are the
+  only active public schedule and wake endpoints.
 
 ## Israeli weekend alarms
 
@@ -48,9 +58,9 @@ the phone.
 
 ## Header branding
 
-The selected calendar/check badge is the header logo on the root, Ya1, managed
-profile, and permanent test pages. It is text-free so it remains legible at
-the small iPhone header size and is included in the PWA offline app shell.
+The selected calendar/check badge is the header logo on managed profile and
+permanent test pages. It is text-free so it remains legible at the small iPhone
+header size and is included in the PWA offline app shell.
 
 ## Exam/profile safety
 

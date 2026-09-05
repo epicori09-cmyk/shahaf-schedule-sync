@@ -113,11 +113,12 @@ class CliEventIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(fake_client.updated)
             self.assertIn("X-SHAHAF-EVENT:1", fake_client.updated or "")
             self.assertIn("X-SHAHAF-EVENT-EXDATE", fake_client.updated or "")
-            data = json.loads((Path(directory) / "site" / "data.json").read_text(encoding="utf-8"))
-            self.assertEqual(data["events"][0]["title"], "יום למידה א-סינכרוני")
-            self.assertEqual([item["date"] for item in data["schedule"]], ["2026-09-16", "2026-09-23"])
+            site = Path(directory) / "site"
+            self.assertFalse((site / "index.html").exists())
+            self.assertFalse((site / "data.json").exists())
+            self.assertFalse((site / "wake.json").exists())
 
-    def test_event_feed_failure_preserves_gist_and_marks_site_stale(self) -> None:
+    def test_event_feed_failure_preserves_gist_and_does_not_publish_legacy_site(self) -> None:
         config = cli.Config(
             "Asia/Jerusalem",
             "https://example.invalid/",
@@ -138,8 +139,10 @@ class CliEventIntegrationTests(unittest.TestCase):
                     now=datetime(2026, 9, 4, 5, 0, tzinfo=ZoneInfo("Asia/Jerusalem")),
                 )
             self.assertIsNone(fake_client.updated)
-            data = json.loads((Path(directory) / "site" / "data.json").read_text(encoding="utf-8"))
-            self.assertTrue(data["stale"])
+            site = Path(directory) / "site"
+            self.assertFalse((site / "index.html").exists())
+            self.assertFalse((site / "data.json").exists())
+            self.assertFalse((site / "wake.json").exists())
 
 
 if __name__ == "__main__":

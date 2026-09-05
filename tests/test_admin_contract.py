@@ -37,6 +37,8 @@ class AdminContractTests(unittest.TestCase):
         self.assertIn("fetch_managed_profiles.py", workflow)
         self.assertIn("PROFILE_SYNC_TOKEN", workflow)
         self.assertIn("--profiles-file", workflow)
+        self.assertIn("Verify retired schedule paths are absent", workflow)
+        self.assertIn("test ! -e site/ya1", workflow)
         self.assertIn("if: always()", workflow)
 
     def test_public_profile_docs_warn_about_obscurity(self) -> None:

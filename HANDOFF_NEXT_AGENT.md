@@ -6,18 +6,18 @@ after the last code changes in this chat. Read it before changing anything.
 ## Mission and non-negotiable safety rules
 
 This project is a school timetable PWA and synchronization system for
-Ostrovsky/Shahaf schedules. It has two legacy profiles and an additive
-multi-student profile system.
+Ostrovsky/Shahaf schedules. The public site now publishes only randomized
+multi-student profiles; the former root YA2 and `/ya1/` schedules are retired.
 
 The most important rule is scope isolation:
 
 - The random managed profile `d1yQtOSfobdzGs0XfzJlNw` is the canonical יא-2
-  schedule for Ori Fisher. The former root profile is archived and redirects
-  to it; root `data.json` and `wake.json` are no longer published.
-- `/ya1/` and `/ya1/wake.json` are the separate יא-1 schedule. The user
-  identifies this profile as Shahar Mosseri.
+  schedule for Ori Fisher. The former root profile is deleted and no longer
+  redirects; root `data.json` and `wake.json` are not published.
+- `/ya1/` and `/ya1/wake.json` were the separate יא-1 schedule. They are now
+  deleted and must not be used by a Shortcut.
 - Managed students under `/students/<random-id>/` remain scoped. Ori's managed
-  profile does not alter the root יא-2 Gist or legacy יא-1 behavior.
+  profile does not alter another student's schedule or alarm state.
 - A student's cancellations, exams, selectors, route, alarm command, and
   public output must remain scoped to that student.
 - Do not put names, home addresses, home coordinates, API keys, tokens,
@@ -46,14 +46,12 @@ GitHub Pages site:
 
 `https://epicori09-cmyk.github.io/shahaf-schedule-sync/`
 
-Main endpoints:
+Active managed endpoint pattern:
 
-- Archived root redirect: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/`
-- Ori schedule: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/`
-- Ori wake JSON: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/wake.json`
-- יא-1 schedule: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/`
-- יא-1 transit wake JSON:
-  `https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/wake.json`
+- Schedule: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/<random-id>/`
+- Pages wake JSON: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/<random-id>/wake.json`
+- Worker wake JSON: `https://shahaf-profile-admin.trading-api-9de14d.workers.dev/public/profiles/<random-id>/wake.json`
+- The former root YA2 and `/ya1/` URLs are expected to return HTTP 404.
 - Permanent UI test page:
   `https://epicori09-cmyk.github.io/shahaf-schedule-sync/test/`
 - Private profile admin Worker:
@@ -62,7 +60,6 @@ Main endpoints:
 Source pages:
 
 - Main Shahaf class source: `https://ostrovsky.shahaf.site/?cls=11&tab=changes`
-- יא-1 Shahaf class source: `https://ostrovsky.shahaf.site/?cls=61&tab=changes`
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
@@ -232,40 +229,20 @@ Its intended logic is:
    create one normal Clock alarm with the exact label.
 
 The Shortcut is meant for Ori's random managed יא-2 profile only. It does not
-manage the יא-1 alarm or any other managed-student alarm.
+manage another student's alarm. The retired YA1 transit Shortcut and the
+legacy root YA2 Shortcut endpoint must not be recreated.
 
-### יא-1 transit alarm
-
-The יא-1 Shortcut is named `Refresh Ya1 Transit Wake Alarm` and uses only:
-
-`Shahaf Ya1 Wake`
-
-The route planner uses the scheduled Israel Ministry of Transport GTFS feed,
-not an unauthenticated Moovit API. It starts at `מרדכי זעירא 5, רעננה`, ends
-at Ostrovsky High School / `אוסטרובסקי 26, רעננה`, includes the walk to the
-first stop, and requires arrival at least five minutes before the first
-confirmed lesson. It chooses the latest safe departure, then minimizes
-transfers and duration as tie breakers. Earlier safe alternatives are exposed
-in the payload/UI.
-
-The Ya1 transit endpoint contains route legs, bus line/stops, walking legs,
-departure, arrival, arrival deadline, wake time, stale/fallback status, and a
-Google Maps verification URL. It does not claim real-time delay/cancellation
-prediction. If GTFS is stale/malformed, Shahaf is unavailable, or no safe
-route exists, it returns `leave`, preserving the existing Ya1 alarm.
-
-Both legacy alarm Shortcuts are intended to run at roughly 05:00 and 06:45
-Israel time using daily personal automations. The existing 07:15 backup alarms
-were intentionally kept during testing. Normal iPhone Clock alarms are used;
-Spotify, jailbreaks, and Apple Developer membership are not required.
+Managed alarm automations may still run at the configured daily times. Normal
+iPhone Clock alarms are used; Spotify, jailbreaks, and Apple Developer
+membership are not required.
 
 ### Managed profile alarms
 
 Worker-managed students receive public `students/<random-id>/wake.json`
 schedule payloads and a Worker Shortcut endpoint at
-`/public/profiles/<random-id>/wake.json`, plus an admin-generated public ID. The default managed label returned by
-the current import flow is `Shahaf`; the legacy labels above are different and
-must not be accidentally substituted.
+`/public/profiles/<random-id>/wake.json`, plus an admin-generated public ID.
+The default managed label returned by the current import flow is `Shahaf`; it
+must remain scoped to the profile whose endpoint the Shortcut fetched.
 
 The managed engine can carry effective alarm settings and one-time commands,
 but the user later requested a simple dashboard and asked to remove the large
@@ -284,11 +261,10 @@ alarm-control UI. Therefore:
 
 ## Source map
 
-- `config.json`: main class `cls=11`, main Gist/site settings, and the
-  config-driven `ya1` profile with `cls=61` and selectors.
-- `src/shahaf_sync/cli.py`: orchestration, source/exam/event caches, root and
-  additional profile processing, managed bundle loading, transit invocation,
-  safe output handling, and Pages generation.
+- `config.json`: main class `cls=11`, main Gist/site settings, managed transit
+  defaults, and special wake-time requests.
+- `src/shahaf_sync/cli.py`: orchestration, source/exam/event caches, managed
+  bundle loading, transit invocation, safe output cleanup, and Pages generation.
 - `src/shahaf_sync/site.py`: HTML/PWA generator, localization, fonts/assets,
   tab/day swipe routing, schedule rows, async-day notices, exam display,
   manifests, service workers, and wake JSON rendering.
@@ -298,8 +274,8 @@ alarm-control UI. Therefore:
   exact change application, and profile-specific exam/lesson selection.
 - `src/shahaf_sync/profile_package.py`: strict validation and normalization of
   imported screenshot/GPT packages.
-- `src/shahaf_sync/ya1_schedule.py`: supplied Ya1 weekly baseline, including
-  photographed periods and the Monday alternative-assessment rows with צחי.
+- `src/shahaf_sync/ya1_schedule.py`: retained historical YA1 baseline code;
+  it is no longer wired into the publication pipeline.
 - `src/shahaf_sync/events.py`: event detection, explicit async/no-school
   phrase recognition, conservative suppression decisions, and display fields.
 - `src/shahaf_sync/exams.py`: exam reconciliation and ICS exam handling.
@@ -384,9 +360,9 @@ expose the admin session or allow global/profile settings changes.
 The response saves the override and triggers a Pages sync in the background.
 When the Shortcut uses the Worker feed documented above, it can fetch and
 apply the matching override immediately; the Pages `wake.json` is reconciled
-afterward. Friday and Saturday still produce no alarms through the normal schedule guard. The
-control is intentionally absent from the archived root and the separate Ya-1
-page, because those are not managed random student profiles.
+afterward. Friday and Saturday still produce no alarms through the normal
+schedule guard. The control exists only on randomized managed student pages;
+the retired root and `/ya1/` pages no longer exist.
 
 The old `admin/worker/README.md` says the Worker is not deployed; that text is
 out of date relative to this chat. The Worker was deployed and its live URL is
@@ -443,9 +419,8 @@ diagnosed at the exact failing step.
 
 A failed source fetch keeps the previous valid output and marks the new
 calculation stale/leave where applicable. A failed managed publish must not
-replace a previously published student page. The main Gist and legacy outputs
-are especially sensitive: no broad cleanup or rebuild should run before
-checking the diff and output paths.
+replace a previously published student page. The retired root and `/ya1/`
+outputs are explicitly removed from each generated Pages artifact.
 
 ## Verification checklist for the next agent
 
@@ -486,7 +461,8 @@ Verify in each language:
 - periods/numbers/time ranges are visually ordered correctly;
 - swipe listeners are in the intended zones;
 - the app link and manifest are present;
-- root and Ya1 endpoints remain separate.
+- root and Ya1 legacy endpoints return HTTP 404; randomized managed endpoints
+  remain available.
 
 For Pages/workflow verification:
 

@@ -10,7 +10,7 @@ from urllib.request import Request
 from shahaf_sync.github import GistClient, GitHubError
 from shahaf_sync.model import Exam
 from shahaf_sync.reconcile import ChangeRecord
-from shahaf_sync.site import archive_profile_site, build_wake_data, render_site
+from shahaf_sync.site import build_wake_data, remove_legacy_root_site, remove_profile_site, render_site
 
 
 class FakeTransport:
@@ -171,10 +171,22 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual(len(data["periods"]), 14)
 
     def test_service_worker_caches_data_for_weak_connection(self) -> None:
-        service_worker = (Path(__file__).parents[1] / "site" / "sw.js").read_text(encoding="utf-8")
-        self.assertIn('"./data.json"', service_worker)
-        self.assertIn("CACHE_NAME = \"shahaf-schedule-v3\"", service_worker)
-        self.assertIn("cache.put(request, response.clone())", service_worker)
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(
+                output,
+                title="Schedule",
+                generated_at="2026-09-04T06:30:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                profile_id="student-profile",
+            )
+            service_worker = (output / "sw.js").read_text(encoding="utf-8")
+            self.assertIn('"./data.json"', service_worker)
+            self.assertIn('CACHE_NAME = "shahaf-schedule-student-profile-v3"', service_worker)
+            self.assertIn("cache.put(request, response.clone())", service_worker)
 
     def test_every_rendered_page_has_installable_pwa_branding(self) -> None:
         with TemporaryDirectory() as directory:
@@ -629,21 +641,27 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual(wake["wake_time"], "07:15")
             self.assertEqual(wake["subject"], "Math")
 
-    def test_archive_profile_site_removes_old_payload_and_points_to_new_profile(self) -> None:
+    def test_legacy_site_cleanup_removes_root_and_ya1_without_touching_students(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory)
             for filename in ("data.json", "wake.json", "manifest.webmanifest", "sw.js", "icon.svg"):
                 (output / filename).write_text("obsolete", encoding="utf-8")
             (output / "fonts").mkdir()
             (output / "fonts" / "Heebo-400.ttf").write_text("obsolete", encoding="utf-8")
-            archive_profile_site(output, "students/random-id/")
+            (output / "index.html").write_text("obsolete", encoding="utf-8")
+            (output / "students" / "random-id").mkdir(parents=True)
+            (output / "students" / "random-id" / "data.json").write_text("managed", encoding="utf-8")
+            (output / "ya1").mkdir()
+            (output / "ya1" / "wake.json").write_text("legacy", encoding="utf-8")
+            remove_legacy_root_site(output)
+            remove_profile_site(output / "ya1")
             self.assertFalse((output / "data.json").exists())
             self.assertFalse((output / "wake.json").exists())
             self.assertFalse((output / "sw.js").exists())
+            self.assertFalse((output / "index.html").exists())
             self.assertFalse((output / "fonts").exists())
-            html = (output / "index.html").read_text(encoding="utf-8")
-            self.assertIn("students/random-id/", html)
-            self.assertIn("location.replace(\"students/random-id/\")", html)
+            self.assertFalse((output / "ya1").exists())
+            self.assertTrue((output / "students" / "random-id" / "data.json").exists())
 
 
 if __name__ == "__main__":

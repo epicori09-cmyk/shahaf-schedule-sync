@@ -14,7 +14,9 @@ The unpinned URL is important: a revision-pinned raw URL will not follow future 
 Ori's current private-by-obscurity managed profile is published at
 `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/`.
 Its Shortcut endpoint is the same path with `wake.json`. The former root
-profile is archived and redirects to this generated profile.
+profile and the separate legacy YA1 profile are retired; they are no longer
+published or redirected. Active schedules use only randomized managed
+`/students/<public-id>/` paths.
 
 The sync reads only Shahaf's explicit, date-specific changes feed. It does not
 compare the whole-school timetable, which contains parallel major groups and
@@ -31,7 +33,8 @@ feed is a successful no-op; an unknown non-empty schema is a safe failure.
 
 The workflow never prints the token. If the Gist is not a valid ICS file, Shahaf is unavailable, or the source page is incomplete, it publishes a stale/error banner and does not write the Gist.
 
-The separate יא-1 page is [https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/](https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/). Its configured Shahaf source is `https://ostrovsky.shahaf.site/?cls=61&tab=changes`. It is a direct URL with no passcode, profile selector, or Settings screen.
+The legacy root YA2 page, `/ya1/` page, and their wake payloads have been
+removed. They are not valid endpoints for new Shortcuts.
 
 For alarm safety, the workflow sends only structured Master יא-2 schedule facts to
 NVIDIA's OpenAI-compatible NIM endpoint using `openai/gpt-oss-20b` with high
@@ -47,25 +50,10 @@ the safety check can run.
 
 The site has three swipeable views: **Now** shows the current and next lesson, **Full schedule** lets you choose a school day and see every Shahaf period (0–13), including free gaps, and **Exams** shows the selected subjects with a calendar alert four days before at 19:00. Changes are removed from the website only after the affected date and period have fully ended; the ICS keeps its `EXDATE` so subscribed calendars stay correct.
 
-The master page is your יא-2 Gist-backed calendar. The separate יא-1 page is
-generated from the public class timetable using the supplied track selectors:
-accelerated 5-point English, Physics with גיא שגיא, Computer Science with מן
-שמרת, Physical Education with דולב מיכל, alternative Computer Science with
-זכאי יצחק, and Cyber with לופו רועי משה, plus the shared subjects. The public
-timetable exposes parallel groups, so it does not import other Physics,
-Computer Science, Math, or English groups. The יא-1 page publishes only its
-own scheduled-transit payload at
-`https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/wake.json`. It uses
-the free Israeli Ministry of Transport GTFS feed, selects the latest route
-that reaches Ostrovsky at least five minutes before the first confirmed יא-1
-lesson, and calculates wake-up 75 minutes before leaving home. The page shows
-the selected bus line, stops, walking legs, and scheduled times; it budgets at
-least five minutes to walk from home to the first stop and considers earlier
-departures when a later bus would not arrive safely. Its Shortcut
-uses the separate `Shahaf Ya1 Wake` label. Scheduled transit data does not
-predict live delays; the endpoint returns `leave` when route data is stale,
-malformed, or no safe route is available. It cannot change the יא-2 Gist or
-wake alarm.
+The old root YA2 and YA1 pages are not part of the active publication model.
+Each active managed student receives an isolated randomized schedule page and
+matching `wake.json` payload; parallel subject groups are selected from that
+student's validated package rather than guessed from a whole-school timetable.
 
 ## Screenshot timetable migration
 

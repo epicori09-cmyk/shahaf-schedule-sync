@@ -82,6 +82,14 @@ jobs:
           NVIDIA_NIM_MODEL: ${{ vars.NVIDIA_NIM_MODEL }}
         run: PYTHONPATH=src python -m shahaf_sync --config config.json --profiles-file "$RUNNER_TEMP/managed-profiles.json"
 
+      - name: Verify retired schedule paths are absent
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success'
+        run: |
+          test ! -e site/index.html
+          test ! -e site/data.json
+          test ! -e site/wake.json
+          test ! -e site/ya1
+
       - name: Update Alexa wake-up reminder
         if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.ori_profile.outputs.schedule_data_url != ''
         continue-on-error: true

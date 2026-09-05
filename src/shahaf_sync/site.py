@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 from html import escape
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -115,11 +116,19 @@ self.addEventListener("fetch", (event) => {{
     (output_dir / "sw.js").write_text(service_worker, encoding="utf-8")
 
 
-def archive_profile_site(output_dir: Path, destination: str) -> None:
-    """Replace an obsolete generated profile with a safe migration page."""
-    output_dir.mkdir(parents=True, exist_ok=True)
+def remove_profile_site(output_dir: Path) -> None:
+    """Remove one exact generated profile directory from the Pages artifact."""
+    if output_dir.is_symlink() or output_dir.is_file():
+        output_dir.unlink(missing_ok=True)
+    elif output_dir.is_dir():
+        shutil.rmtree(output_dir)
+
+
+def remove_legacy_root_site(output_dir: Path) -> None:
+    """Remove the old root schedule while preserving managed profile folders."""
     for filename in ARCHIVED_PROFILE_FILES:
         (output_dir / filename).unlink(missing_ok=True)
+    (output_dir / "index.html").unlink(missing_ok=True)
     fonts_dir = output_dir / "fonts"
     if fonts_dir.is_dir():
         for child in fonts_dir.iterdir():
@@ -129,27 +138,6 @@ def archive_profile_site(output_dir: Path, destination: str) -> None:
             fonts_dir.rmdir()
         except OSError:
             pass
-    target = escape(destination, quote=True)
-    target_js = json.dumps(destination)
-    (output_dir / "index.html").write_text(
-        """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="robots" content="noindex,nofollow,noarchive">
-  <meta http-equiv="refresh" content="0;url={target}">
-  <title>Schedule moved</title>
-</head>
-<body>
-  <p>This schedule moved to a private profile.</p>
-  <p><a href="{target}">Open the current schedule</a></p>
-  <script>location.replace({target_js});</script>
-</body>
-</html>
-""".format(target=target, target_js=target_js),
-        encoding="utf-8",
-    )
 
 
 def _record_to_dict(record: ChangeRecord) -> dict[str, Any]:

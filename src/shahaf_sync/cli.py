@@ -21,7 +21,7 @@ from .profiles import apply_changes, lesson_to_dict, select_changes, select_exam
 from .profile_package import ProfilePackageError, build_package_schedule, package_to_spec, validate_package
 from .reconcile import ChangeRecord, reconcile_calendar, reconcile_event_entries
 from .shahaf import ShahafSourceError, parse_changes_html, parse_events_html, parse_exams_html, parse_timetable_html
-from .site import archive_profile_site, build_schedule, build_wake_data, render_site
+from .site import build_schedule, build_wake_data, remove_legacy_root_site, remove_profile_site, render_site
 from .transit import (
     TransitSourceError,
     build_ya1_transit_wake,
@@ -580,8 +580,12 @@ def execute(
     current = now or _now(config)
     client = GistClient(token=os.environ.get("GIST_TOKEN"))
     site_path = _site_path(config, root)
+    # The public surface now consists only of randomized managed profiles.
+    # Remove the old root and /ya1 outputs before any success or failure path
+    # can accidentally preserve or recreate them.
+    remove_legacy_root_site(site_path)
+    remove_profile_site(site_path / "ya1")
     previous = _previous_site_state(site_path)
-    ya1_site_path = site_path / "ya1"
     managed_site_path = site_path / "students"
     previous_managed: dict[str, dict[str, object]] = {}
     if managed_site_path.exists():
@@ -590,10 +594,9 @@ def execute(
                 previous_managed[child.name] = _previous_site_state(child)
     # This directory is generated exclusively from the private Worker bundle.
     # Clearing this exact output root ensures disabled profiles disappear from
-    # the next Pages artifact without touching the legacy root or /ya1 page.
+    # the next Pages artifact.
     if managed_site_path.exists():
         shutil.rmtree(managed_site_path)
-    previous_ya1 = _previous_site_state(ya1_site_path)
     source_url = f"{config.source_base_url}?cls={config.class_id}&tab=changes"
     try:
         gist_file = client.read_file(config.gist_id, config.gist_filename)
@@ -686,23 +689,10 @@ def execute(
         events_cache: dict[str, EventSnapshot] = {str(config.class_id): event_snapshot}
         for spec in profile_specs:
             try:
-                # Keep the established config-driven profiles on their old
-                # path byte-for-byte in behavior. Only Worker-managed
-                # profiles use the shared class/exam cache below.
+                # The former config-driven YA1 profile is retired. Only
+                # randomized Worker-managed profiles are published now.
                 if not spec.get("managed_profile"):
-                    class_id = str(spec.get("class_id", ""))
-                    if class_id not in events_cache:
-                        events_cache[class_id] = fetch_events(config, current.date(), class_id=class_id)
-                    profile_views.append(
-                        _build_public_profile(
-                            config,
-                            spec,
-                            current,
-                            events_snapshot=events_cache[class_id],
-                            nim_client=nim_client,
-                        )
-                    )
-                    profile_specs_by_id[str(spec.get("id", "profile"))] = spec
+                    print(f"Skipping retired legacy profile: {spec.get('id', 'profile')}")
                     continue
                 class_id = str(spec.get("class_id", ""))
                 class_number = int(spec.get("class_number", 0))
@@ -733,11 +723,10 @@ def execute(
                 profile_views.append(profile)
             except (ShahafSourceError, SyncFailure, ValueError, OSError) as profile_exc:
                 output_id = str(spec.get("public_id", spec.get("id", "profile")))
-                output_path = site_path / "students" / output_id if spec.get("managed_profile") else ya1_site_path
                 previous_profile = previous_managed.get(output_id, {})
                 profile_specs_by_id[output_id] = spec
                 profile_views.append(
-                    _profile_failure(spec, previous_profile if spec.get("managed_profile") else previous_ya1, current, str(profile_exc))
+                    _profile_failure(spec, previous_profile, current, str(profile_exc))
                 )
 
         transit_spec = config.transit or {}
@@ -747,11 +736,11 @@ def execute(
         transit_cache: dict[date, object] = {}
         for profile in profile_views:
             profile_spec = profile_specs_by_id.get(str(profile.get("id")), {})
-            if str(profile.get("id")) != "ya1" and not profile_spec.get("managed_profile"):
+            if not profile_spec.get("managed_profile"):
                 continue
-            profile_transit = profile_spec.get("transit") if profile_spec.get("managed_profile") else transit_spec
+            profile_transit = profile_spec.get("transit")
             profile_transit = profile_transit if isinstance(profile_transit, dict) else {}
-            if profile_spec.get("managed_profile") and not bool(profile_transit.get("enabled", False)):
+            if not bool(profile_transit.get("enabled", False)):
                 continue
             origin_address = str(profile_transit.get("origin_address", transit_spec.get("origin_address", "מרדכי זעירא 5, רעננה")))
             destination_address = str(transit_spec.get("destination_address", "אוסטרובסקי 26, רעננה"))
@@ -762,8 +751,6 @@ def execute(
                 destination_raw = transit_spec["destination_coordinates"]
                 origin = (float(origin_raw["lat"]), float(origin_raw["lon"]))
                 destination = (float(destination_raw["lat"]), float(destination_raw["lon"]))
-                if not bool(profile_transit.get("enabled", False)):
-                    raise TransitSourceError("Ya1 transit wake is disabled in config")
                 if transit_archive is None and transit_download_error is None:
                     transit_archive, transit_timestamp = download_gtfs(
                         str(transit_spec.get("gtfs_url", ""))
@@ -781,7 +768,7 @@ def execute(
                 profile_schedule = profile.get("schedule")
                 if not isinstance(profile_schedule, list) or bool(profile.get("stale")):
                     raise TransitSourceError(str(profile.get("error") or "Ya1 Shahaf schedule is stale"))
-                alarm_settings = profile_spec.get("alarm_settings") if profile_spec.get("managed_profile") else {}
+                alarm_settings = profile_spec.get("alarm_settings")
                 alarm_settings = alarm_settings if isinstance(alarm_settings, dict) else {}
                 profile["transit_wake"] = build_ya1_transit_wake(
                     schedule_for,
@@ -800,20 +787,18 @@ def execute(
                     round_to_minutes=int(alarm_settings.get("round_to_minutes", 1)),
                     min_wake_time=alarm_settings.get("min_wake_time"),
                     max_wake_time=alarm_settings.get("max_wake_time"),
-                    managed_controls=bool(profile_spec.get("managed_profile")),
+                    managed_controls=True,
                 )
-                if profile_spec.get("managed_profile"):
-                    # New student endpoints may show the selected route, but
-                    # never publish a home address or precise home point.
-                    for key in ("origin_address", "origin", "origin_coordinates"):
-                        profile["transit_wake"].pop(key, None)
+                # New student endpoints may show the selected route, but
+                # never publish a home address or precise home point.
+                for key in ("origin_address", "origin", "origin_coordinates"):
+                    profile["transit_wake"].pop(key, None)
             except (KeyError, TypeError, ValueError, TransitSourceError, OSError) as transit_exc:
                 transit_download_error = str(transit_exc) if transit_archive is None else transit_download_error
                 profile["transit_wake"] = _stale_transit_payload(config, current, str(transit_exc))
                 profile["transit_wake"]["source_timestamp"] = transit_timestamp
-                if profile_spec.get("managed_profile"):
-                    for key in ("origin_address", "origin", "origin_coordinates"):
-                        profile["transit_wake"].pop(key, None)
+                for key in ("origin_address", "origin", "origin_coordinates"):
+                    profile["transit_wake"].pop(key, None)
         canonical_profile_id = _canonical_managed_profile_id(
             profile_views,
             profile_specs_by_id,
@@ -825,28 +810,10 @@ def execute(
             and isinstance(config.special_requests.get("wake_time_by_first_lesson_start"), dict)
             else None
         )
-        if canonical_profile_id:
-            archive_profile_site(site_path, f"students/{canonical_profile_id}/")
-        else:
-            render_site(
-                site_path,
-                title=config.site_title,
-                generated_at=current.isoformat(),
-                source_url=source_url,
-                source_updated=snapshot.update_text,
-                changes=changes,
-                stale=False,
-                last_successful_sync=current.isoformat(),
-                schedule=schedule,
-                exams=root_exams,
-                events=root_event_processing.events,
-                events_available=True,
-                events_source_updated=event_snapshot.update_text,
-                now=current,
-                alarm_safety=alarm_safety,
-                alarm_safety_reason=alarm_safety_reason,
-                wake_time_by_first_lesson_start=root_wake_rules,
-            )
+        # The former root YA2 schedule is retired. Its source/Gist processing
+        # remains internal, but no root schedule or root wake payload is
+        # published even if no canonical managed profile is available.
+        remove_legacy_root_site(site_path)
         for profile in profile_views:
             profile_spec = profile_specs_by_id.get(str(profile.get("id")), {})
             managed = bool(profile_spec.get("managed_profile"))
@@ -855,7 +822,9 @@ def execute(
             profile_schedule = profile.get("schedule") if profile.get("schedule_available") else None
             profile_exams = profile.get("exams") if profile.get("exams_available") else None
             profile_events = profile.get("events") if profile.get("events_available") else None
-            profile_output = site_path / "students" / str(profile.get("id")) if managed else ya1_site_path
+            if not managed:
+                continue
+            profile_output = site_path / "students" / str(profile.get("id"))
             profile_wake_rules = (
                 root_wake_rules
                 if managed and str(profile.get("id")) == canonical_profile_id
@@ -863,7 +832,7 @@ def execute(
             )
             render_site(
                 profile_output,
-                title="Student schedule" if managed else str(profile.get("label", "Ostrovsky Grade 11-1")),
+                title="Student schedule",
                 generated_at=current.isoformat(),
                 source_url=str(profile.get("source_url", f"{config.source_base_url}?cls=61&tab=changes")),
                 source_updated=str(profile.get("source_updated", "")),
@@ -880,12 +849,12 @@ def execute(
                 now=current,
                 alarm_safety=str(profile.get("events_alarm_safety", "not-required")),
                 alarm_safety_reason=str(profile.get("events_alarm_safety_reason", "")),
-                profile_id=str(profile.get("id", "ya1")),
-                profile_label="Student schedule" if managed else str(profile.get("label", "Grade 11-1")),
-                profile_mark="STUDENT" if managed else str(profile.get("mark", "XI·1")),
+                profile_id=str(profile.get("id", "profile")),
+                profile_label="Student schedule",
+                profile_mark="STUDENT",
                 profile_class_id=str(profile.get("class_id", "61")),
-                publish_wake=managed,
-                public_profile=managed,
+                publish_wake=True,
+                public_profile=True,
                 transit_wake=profile.get("transit_wake") if isinstance(profile.get("transit_wake"), dict) else None,
                 alarm_settings=profile_spec.get("alarm_settings") if managed and isinstance(profile_spec.get("alarm_settings"), dict) else None,
                 alarm_override=profile_spec.get("alarm_override") if managed and isinstance(profile_spec.get("alarm_override"), dict) else None,
@@ -895,26 +864,8 @@ def execute(
         return changes
     except (GitHubError, CalendarFormatError, SyncFailure, ShahafSourceError, ValueError) as exc:
         message = str(exc)
-        # Always leave a JSON response for the isolated Shortcut, even when
-        # the main Gist/source fails before the ya1 profile loop starts.
-        ya1_wake_path = site_path / "ya1" / "wake.json"
-        ya1_wake_path.parent.mkdir(parents=True, exist_ok=True)
-        ya1_wake_path.write_text(
-            json.dumps(_stale_transit_payload(config, current, message), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        render_site(
-            site_path,
-            title=config.site_title,
-            generated_at=current.isoformat(),
-            source_url=source_url,
-            source_updated=str(previous.get("source_updated", "")),
-            changes=[],
-            stale=True,
-            last_successful_sync=str(previous.get("last_successful_sync", "")),
-            error=message,
-            now=current,
-        )
+        remove_legacy_root_site(site_path)
+        remove_profile_site(site_path / "ya1")
         print(f"SAFE FAILURE: {message}")
         raise SyncFailure(message) from exc
 
