@@ -66,13 +66,13 @@ Source pages:
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
-The latest code commit before this documentation is `fb0de30`:
-`Route all managed profile links through fast feed` (following `94daccf`,
-which added the immediate Worker alarm feed).
+The latest code commit before this documentation is `f463fbd`:
+`Remove secondary alarm helper text` (following `3579688`, which added the
+restore previous alarm action).
 
-The last live Pages workflow verified in the chat was run `33980985740`,
-successful, for `fb0de30`. The Worker was deployed from the same code as
-version `628ff4cb-8f4b-4a29-a2c7-a27e8d86f979`, with the public per-profile
+The last live Pages workflow verified in the chat was run `33982103545`,
+successful, for `f463fbd`. The Worker was deployed from the alarm-control code
+version `6c200a65-a25c-415f-aec8-0fd697f48913`, with the public per-profile
 alarm endpoint targeting the next scheduled school day. A docs-only commit
 does not change the generated site, but this workflow remains the repository's
 deployment verification path.
