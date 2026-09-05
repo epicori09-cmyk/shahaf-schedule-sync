@@ -196,7 +196,8 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("cancelledByOccurrence", html)
             self.assertIn('is-cancelled', html)
             self.assertIn('text-decoration:line-through', html)
-            self.assertIn('!item && cancelled', html)
+            self.assertIn('const mainMarkup = item', html)
+            self.assertIn('        ? ""\n        :', html)
             self.assertIn('emptyKind === "no-lesson" ? "noLesson" : "gap"', html)
 
     def test_alarm_time_editor_has_a_non_overlapping_shrinkable_input(self) -> None:
@@ -214,7 +215,7 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             html = (Path(directory) / "index.html").read_text(encoding="utf-8")
             self.assertIn('grid-template-columns:minmax(0,1fr) auto', html)
-            self.assertIn('.alarm-time-row input{min-width:0', html)
+            self.assertIn('.alarm-time-row input{width:100%;min-width:0', html)
 
     def test_service_worker_caches_data_for_weak_connection(self) -> None:
         with TemporaryDirectory() as directory:
