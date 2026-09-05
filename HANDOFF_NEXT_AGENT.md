@@ -333,6 +333,25 @@ admin name updates/reactivates the same profile instead of creating a second
 one. Public IDs have at least 128 bits of randomness and are private by
 obscurity, not real authentication.
 
+### Public per-student alarm control
+
+Every active managed `/students/<random-id>/` page now renders a
+**Cancel / move my alarm for today** control at the bottom of its Now tab.
+The control opens an explicit cancel-or-move choice and confirmation. It calls
+`POST /public/profiles/<random-id>/alarm-command` on the Worker, with only
+`{"action":"clear"}` or `{"action":"set","wake_time":"HH:MM"}`. The Worker
+requires the configured Pages origin, resolves the current date and time in
+`Asia/Jerusalem`, rejects past times and arbitrary dates, rate-limits requests,
+and updates only that public ID's `alarm_overrides` row. It does not expose the
+admin session or allow global/profile settings changes.
+
+The response is queued rather than an immediate phone mutation: a successful
+Pages sync publishes that profile's `wake.json`, and the existing Shahaf
+Shortcut must fetch it before the iPhone Clock alarm changes. Friday and
+Saturday still produce no alarms through the normal schedule guard. The
+control is intentionally absent from the archived root and the separate Ya-1
+page, because those are not managed random student profiles.
+
 The old `admin/worker/README.md` says the Worker is not deployed; that text is
 out of date relative to this chat. The Worker was deployed and its live URL is
 listed above. If deployment is needed, run Wrangler from `admin/worker`, where

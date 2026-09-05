@@ -45,6 +45,16 @@ The defaults are a 75-minute wake buffer, stale data leaves the current alarm
 unchanged, and confirmed no-school data clears only that profile's primary
 alarm. Existing Ya-1 and Ya-2 paths are not connected to these controls.
 
+Each managed public profile also has a **Cancel / move my alarm for today**
+control at the bottom of its Now tab. It accepts only a confirmed `clear` or
+future `set` time for the current Israel date, and the Worker looks up the
+profile from the URL before writing its single `alarm_overrides` row. It cannot
+change another profile, choose a future date, or change global settings. The
+response is queued: the next Pages sync updates that profile's `wake.json`, and
+the student's existing Shahaf Shortcut must run before the iPhone alarm
+changes. Friday and Saturday remain protected by the normal no-weekend alarm
+logic.
+
 The dashboard supports preview, bulk pause/resume/reset/set/clear/leave
 commands, per-profile settings, expiring date overrides, audit history, and
 settings rollback. A force command requires an explicit reason and

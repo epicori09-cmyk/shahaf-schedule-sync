@@ -17,6 +17,9 @@ from .reconcile import ChangeRecord
 
 PWA_ASSETS_DIR = Path(__file__).with_name("assets")
 ISRAEL_WEEKEND_WEEKDAYS = frozenset({4, 5})  # Friday and Saturday
+# Public Worker origin used by the managed-profile self-service alarm control.
+# This is a public endpoint origin, not a credential.
+PUBLIC_ALARM_API_ORIGIN = "https://shahaf-profile-admin.trading-api-9de14d.workers.dev"
 ARCHIVED_PROFILE_FILES = (
     "data.json",
     "wake.json",
@@ -637,6 +640,7 @@ def render_site(
     changes_html = '''<section class="changes" id="changes-view" aria-labelledby="changes-title"><div class="section-title"><h2 id="changes-title" data-i18n="changes">Changes</h2><span id="changes-count">0</span></div><div class="change-list" id="change-list"></div></section>'''
 
     transit_html = '''<section class="transit-wake-card" id="transit-wake-card" aria-labelledby="transit-title"><div class="section-title"><h2 id="transit-title" data-i18n="busPlan">Bus plan</h2><span id="transit-status">Checking</span></div><div id="transit-summary" class="transit-summary" data-i18n="checkingRoute">Checking the safest scheduled route…</div><div id="transit-legs" class="transit-legs"></div><p class="transit-note" data-i18n="earlierBuses">Earlier buses were considered; this is the latest scheduled departure that still arrives safely.</p><a id="transit-map" class="transit-map" href="#" target="_blank" rel="noreferrer" data-i18n="verifyRoute">Verify route in Google Maps ↗</a></section>''' if profile_id == "ya1" else ""
+    alarm_html = '''<section class="alarm-self-service" id="alarm-self-service" aria-labelledby="alarm-self-service-title"><div class="section-title"><h2 id="alarm-self-service-title" data-i18n="alarmTitle">My alarm</h2></div><button id="alarm-self-service-toggle" class="small-button" type="button" aria-expanded="false" aria-controls="alarm-self-service-panel" data-i18n="alarmButton">Cancel / move my alarm for today</button><div id="alarm-self-service-panel" class="alarm-panel" hidden><p class="alarm-help" data-i18n="alarmInstruction">This changes only this schedule’s alarm for today. It will be applied after the next sync.</p><div class="alarm-actions"><button id="alarm-cancel-today" class="alarm-action alarm-action-danger" type="button" data-i18n="cancelTodayAlarm">Cancel today’s alarm</button><div class="alarm-time-row"><label for="alarm-move-time" data-i18n="moveAlarmTo">Move today’s alarm to</label><input id="alarm-move-time" type="time" inputmode="numeric" step="60"><button id="alarm-move-today" class="alarm-action" type="button" data-i18n="moveAlarm">Move alarm</button></div></div><button id="alarm-keep-current" class="small-button" type="button" data-i18n="keepAlarm">Keep current alarm</button></div><p id="alarm-self-service-status" class="alarm-status" role="status" aria-live="polite"></p></section>''' if public_profile else ""
 
     gate_html = '''<section id="site-access-gate" class="site-access-gate" aria-labelledby="gate-title"><div class="gate-card"><p class="eyebrow" data-i18n="privatePage">Private page</p><h1 id="gate-title" data-i18n="enterYa1Schedule">Enter Ya1 schedule</h1><p data-i18n="typePhrase">Type the access phrase to continue.</p><form id="gate-form"><label for="gate-phrase" data-i18n="accessPhrase">Access phrase</label><input id="gate-phrase" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" dir="auto" required><button type="submit" data-i18n="enter">Enter</button><p id="gate-error" role="alert" aria-live="polite"></p></form></div></section>''' if profile_id == "ya1" else ""
     gate_css = '''.site-locked .app{display:none}.site-access-gate{display:grid;place-items:center;min-height:100vh;padding:24px}.site-access-gate[hidden]{display:none}.gate-card{width:min(100%,420px);padding:25px 22px;border:1px solid var(--line);border-radius:22px;background:var(--card);box-shadow:var(--shadow)}.gate-card h1{font-size:34px;margin:8px 0}.gate-card>p:not(.eyebrow){color:var(--muted);font-size:14px}.gate-card label{display:block;margin:20px 0 7px;font-size:12px;font-weight:750}.gate-card input{width:100%;height:47px;padding:0 13px;border:1px solid var(--line);border-radius:12px;background:var(--paper);color:var(--ink);font:inherit}.gate-card button{width:100%;height:47px;margin-top:11px;border:0;border-radius:12px;background:var(--ink);color:#fff;font:inherit;font-weight:800;cursor:pointer}.gate-card #gate-error{min-height:18px;margin:9px 0 0;color:var(--red);font-size:12px}''' if profile_id == "ya1" else ""
@@ -646,6 +650,8 @@ def render_site(
     schedule_json = json.dumps(schedule_data, ensure_ascii=False).replace("</", "<\\/")
     periods_json = json.dumps(periods, ensure_ascii=False)
     primary_profile_json = json.dumps(primary_profile, ensure_ascii=False).replace("</", "<\\/")
+    alarm_command_url = f"{PUBLIC_ALARM_API_ORIGIN}/public/profiles/{profile_id}/alarm-command" if public_profile else ""
+    alarm_command_url_json = json.dumps(alarm_command_url, ensure_ascii=False).replace("</", "<\\/")
     schedule_available = "true" if schedule is not None else "false"
     theme_class = "theme-pink" if (profile_id == "ya1" or public_profile) else "theme-green"
     robots = '<meta name="robots" content="noindex,nofollow,noarchive">' if public_profile else ""
@@ -658,6 +664,11 @@ def render_site(
             "ready": "Ready", "leaveHome": "Leave home", "arriveBy": "arrive by", "earlierBuses": "Earlier buses were considered; this is the latest scheduled departure that still arrives safely.",
             "verifyRoute": "Verify route in Google Maps ↗", "noRouteNeeded": "No route needed", "alarmUnchanged": "Alarm unchanged",
             "noLessonsScheduled": "No confirmed lessons are scheduled.", "transitUnavailable": "Transit data is unavailable, so the existing alarm stays unchanged.",
+            "alarmTitle": "My alarm", "alarmButton": "Cancel / move my alarm for today", "alarmInstruction": "This changes only this schedule’s alarm for today. It will be applied after the next sync.",
+            "cancelTodayAlarm": "Cancel today’s alarm", "moveAlarmTo": "Move today’s alarm to", "moveAlarm": "Move alarm", "keepAlarm": "Keep current alarm",
+            "alarmConfirmCancel": "Cancel this schedule’s alarm for today?", "alarmConfirmMove": "Move this schedule’s alarm to {time} today?", "alarmSaving": "Saving today’s alarm change…",
+            "alarmCancelQueued": "Today’s alarm cancellation is queued. Run the Shahaf Shortcut to apply it on the phone.", "alarmMoveQueued": "Today’s alarm move is queued. Run the Shahaf Shortcut to apply it on the phone.",
+            "alarmError": "The alarm change could not be submitted. Please try again.", "alarmFutureTime": "Choose a future time today.",
             "privatePage": "Private page", "enterYa1Schedule": "Enter Ya1 schedule", "typePhrase": "Type the access phrase to continue.",
             "accessPhrase": "Access phrase", "enter": "Enter", "incorrectPhrase": "That phrase is not correct.", "everyPeriod": "Every period",
             "backToNow": "Back to now", "chooseSchoolDay": "Choose a school day", "today": "Today", "loading": "Loading…", "noSchoolDays": "No school days are available yet.",
@@ -676,6 +687,11 @@ def render_site(
             "synced": "מסונכרן", "errorDetails": "פרטי שגיאה", "busPlan": "תוכנית נסיעה", "checkingRoute": "בודק את המסלול המתוזמן הבטוח ביותר…", "ready": "מוכן",
             "leaveHome": "יציאה מהבית", "arriveBy": "הגעה עד", "earlierBuses": "נבדקו גם אוטובוסים מוקדמים יותר; זהו האוטובוס המאוחר ביותר שמגיע בזמן.", "verifyRoute": "בדיקת המסלול ב-Google Maps ↗",
             "noRouteNeeded": "אין צורך במסלול", "alarmUnchanged": "ההתראה נשארת ללא שינוי", "noLessonsScheduled": "אין שיעורים מאושרים במערכת.", "transitUnavailable": "נתוני התחבורה אינם זמינים, לכן ההתראה הקיימת נשארת ללא שינוי.",
+            "alarmTitle": "ההתראה שלי", "alarmButton": "ביטול / שינוי ההתראה שלי להיום", "alarmInstruction": "פעולה זו משנה רק את ההתראה של המערכת הזו להיום. השינוי יוחל לאחר הסנכרון הבא.",
+            "cancelTodayAlarm": "ביטול ההתראה להיום", "moveAlarmTo": "שינוי ההתראה להיום לשעה", "moveAlarm": "שינוי ההתראה", "keepAlarm": "השארת ההתראה הנוכחית",
+            "alarmConfirmCancel": "לבטל את ההתראה של המערכת הזו להיום?", "alarmConfirmMove": "לשנות את ההתראה של המערכת הזו להיום לשעה {time}?", "alarmSaving": "שומר את שינוי ההתראה להיום…",
+            "alarmCancelQueued": "ביטול ההתראה להיום הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל אותו בטלפון.", "alarmMoveQueued": "שינוי ההתראה להיום הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל אותו בטלפון.",
+            "alarmError": "לא ניתן לשלוח את שינוי ההתראה. נסה שוב.", "alarmFutureTime": "יש לבחור שעה עתידית להיום.",
             "privatePage": "עמוד פרטי", "enterYa1Schedule": "כניסה למערכת י״א 1", "typePhrase": "הקלד את משפט הגישה כדי להמשיך.", "accessPhrase": "משפט גישה", "enter": "כניסה", "incorrectPhrase": "המשפט אינו נכון.",
             "everyPeriod": "כל השעות", "backToNow": "חזרה לעכשיו", "chooseSchoolDay": "בחירת יום לימודים", "today": "היום", "loading": "טוען…", "noSchoolDays": "אין ימי לימודים זמינים עדיין.", "changes": "שינויים",
             "noUpcomingChanges": "אין ביטולים או עדכונים קרובים.", "cancelled": "בוטל", "changed": "שונה", "added": "נוסף", "scheduleUpdate": "עדכון מערכת", "period": "שעה",
@@ -734,11 +750,12 @@ html[dir="rtl"] .identity,html[dir="rtl"] .source,html[dir="rtl"] .view-switch,h
  .period-info>.period-range{{display:block;letter-spacing:-.02em}}
  .next-card .lesson-time bdi small{{display:inline;margin-top:0}}
  .view-panel-enter-next{{animation:view-in-next .46s cubic-bezier(.2,.8,.2,1) both}}.view-panel-enter-previous{{animation:view-in-previous .46s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-next{{animation:day-in-next .42s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-previous{{animation:day-in-previous .42s cubic-bezier(.2,.8,.2,1) both}}
+ .alarm-self-service{{margin:18px 0 29px;padding:17px 18px;border:1px solid var(--line);border-radius:18px;background:var(--card);box-shadow:0 5px 16px #142b3508}}.alarm-self-service .section-title{{margin-bottom:9px}}.alarm-self-service .section-title h2{{font-size:21px}}.alarm-panel[hidden]{{display:none}}.alarm-help{{margin:0 0 13px;color:var(--muted);font-size:12px;line-height:1.4}}.alarm-actions{{display:grid;gap:9px}}.alarm-action{{min-height:42px;padding:10px 13px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-size:13px;font-weight:750;cursor:pointer;text-align:start}}.alarm-action-danger{{border-color:#f1d0d0;color:var(--red)}}.alarm-action:disabled,.alarm-self-service .small-button:disabled{{cursor:not-allowed;opacity:.55}}.alarm-time-row{{display:grid;grid-template-columns:1fr auto;align-items:center;gap:9px}}.alarm-time-row label{{grid-column:1 / -1;color:var(--muted);font-size:12px;font-weight:700}}.alarm-time-row input{{width:100%;min-height:42px;padding:8px 10px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-variant-numeric:tabular-nums}}.alarm-time-row input:focus{{outline:3px solid #8ecdc055;border-color:#8ecdc0}}.alarm-status{{min-height:18px;margin:10px 0 0;color:var(--green);font-size:12px;line-height:1.4}}.alarm-status:empty{{display:none}}
  {gate_css}
 </style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}{gate_script}<main class="app">
 <header class="topbar"><a class="identity" href="."><img class="mark" src="./header-logo.png" alt="" aria-hidden="true"><span><strong>My schedule</strong></span></a></header>
   <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
-<section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p>{transit_html}</section>
+<section id="now-view" class="live-area" aria-labelledby="today-title"><p id="today-label" class="date-line">Loading today’s schedule…</p>{status}<h1 id="today-title">Today’s schedule</h1><article class="lesson-card" id="current-lesson"><span class="lesson-kicker">Now</span><h2 id="current-subject">Checking…</h2><p id="current-detail" class="lesson-detail"></p><div id="current-time" class="lesson-time"></div></article><article class="next-card" id="next-lesson"><div><span class="lesson-kicker">Next up</span><h3 id="next-subject">Checking…</h3><p id="next-detail" class="lesson-detail"></p></div><div id="next-time" class="lesson-time"></div></article><p id="schedule-note" class="date-line" style="margin:10px 2px 0;font-size:12px"></p>{transit_html}{alarm_html}</section>
 <section id="full-view" class="full-schedule" hidden aria-labelledby="full-title"><div class="schedule-heading"><div><p class="eyebrow">Every period</p><h2 id="full-title">Schedule</h2></div><button id="back-to-now" class="small-button" type="button">Back to now</button></div><div id="full-day-surface" class="day-surface"><div id="day-picker" class="day-picker" role="listbox" aria-label="Choose a school day"></div><div id="full-day-content" class="day-content"><div id="day-notice" class="day-notice" role="status" hidden></div><div class="selected-day"><div><h3 id="selected-day-title">Loading…</h3><p id="selected-day-summary"></p></div><button id="jump-today" class="small-button" type="button">Today</button></div><div id="schedule-periods" class="period-list"></div></div></div></section>
  {exams_html}
  {changes_html}
@@ -774,6 +791,7 @@ const openShahafApp = (event) => {{
 }};
 if (footerSource) {{ footerSource.textContent = tr("openShahaf") + " ↗"; footerSource.setAttribute("aria-label", tr("openShahaf")); footerSource.addEventListener("click", openShahafApp); }}
 if (shahafIsHebrew) document.title = tr("mySchedule");
+ const publicAlarmEndpoint = {alarm_command_url_json};
  const activeProfile = {primary_profile_json};
  const periods = {periods_json};
 const scheduleZone = "Asia/Jerusalem";
@@ -787,6 +805,50 @@ let events = activeProfile.events || [];
  let exams = activeProfile.exams || [];
  const transitWake = activeProfile.transit_wake || null;
 function nowInSchoolZone() {{ const parts = new Intl.DateTimeFormat("en-CA", {{ timeZone: scheduleZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }}).formatToParts(new Date()); const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value])); return {{ date: `${{values.year}}-${{values.month}}-${{values.day}}`, minutes: Number(values.hour) * 60 + Number(values.minute) }}; }}
+function installAlarmSelfService() {{
+  const card = document.getElementById("alarm-self-service");
+  if (!card || !publicAlarmEndpoint) return;
+  const toggle = document.getElementById("alarm-self-service-toggle");
+  const panel = document.getElementById("alarm-self-service-panel");
+  const cancel = document.getElementById("alarm-cancel-today");
+  const move = document.getElementById("alarm-move-today");
+  const keep = document.getElementById("alarm-keep-current");
+  const time = document.getElementById("alarm-move-time");
+  const status = document.getElementById("alarm-self-service-status");
+  const controls = [toggle, cancel, move, keep, time].filter(Boolean);
+  const setBusy = (busy) => controls.forEach((control) => {{ control.disabled = busy; }});
+  const close = () => {{ panel.hidden = true; toggle.setAttribute("aria-expanded", "false"); }};
+  const submit = async (action) => {{
+    const payload = {{ action }};
+    const messageKey = action === "clear" ? "alarmCancelQueued" : "alarmMoveQueued";
+    if (action === "set") payload.wake_time = time.value;
+    setBusy(true);
+    status.textContent = tr("alarmSaving");
+    try {{
+      const response = await fetch(publicAlarmEndpoint, {{ method: "POST", mode: "cors", headers: {{ "content-type": "application/json" }}, body: JSON.stringify(payload) }});
+      const body = await response.json().catch(() => ({{}}));
+      if (!response.ok) throw new Error(body.error || tr("alarmError"));
+      status.textContent = tr(messageKey);
+      close();
+    }} catch (error) {{
+      status.textContent = error.message || tr("alarmError");
+    }} finally {{
+      setBusy(false);
+    }}
+  }};
+  toggle.addEventListener("click", () => {{
+    const open = panel.hidden;
+    panel.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) time.focus();
+  }});
+  keep.addEventListener("click", close);
+  cancel.addEventListener("click", () => {{ if (window.confirm(tr("alarmConfirmCancel"))) submit("clear"); }});
+  move.addEventListener("click", () => {{
+    if (!time.value || minutes(time.value) <= nowInSchoolZone().minutes) {{ status.textContent = tr("alarmFutureTime"); return; }}
+    if (window.confirm(tr("alarmConfirmMove").replace("{{time}}", time.value))) submit("set");
+  }});
+}}
 function minutes(value) {{ const [hour, minute] = value.split(":").map(Number); return hour * 60 + minute; }}
 function formatTime(value) {{ const [hour, minute] = value.split(":").map(Number); if (shahafIsHebrew) return `${{String(hour).padStart(2, "0")}}:${{String(minute).padStart(2, "0")}}`; return `${{hour % 12 || 12}}:${{String(minute).padStart(2, "0")}} ${{hour >= 12 ? "PM" : "AM"}}`; }}
 function escapeHtml(value) {{ return String(value ?? "").replace(/[&<>]/g, (char) => ({{"&":"&amp;","<":"&lt;",">":"&gt;"}}[char])).replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }}
@@ -851,7 +913,7 @@ attachSwipe(document.getElementById("full-day-content"), "days");
 attachSwipe(document.getElementById("now-view"), "views");
 attachSwipe(document.getElementById("changes-view"), "views");
 attachSwipe(document.getElementById("exams-view"), "views");
- renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+ installAlarmSelfService(); renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 </script></body></html>
 '''
     (output_dir / "index.html").write_text(html, encoding="utf-8")

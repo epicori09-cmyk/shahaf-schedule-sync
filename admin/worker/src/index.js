@@ -219,6 +219,46 @@ function originOK(request, env, required = false) {
   if (!origin) return !required;
   return origin === env.ADMIN_ORIGIN;
 }
+function publicSiteOrigin(env) {
+  try { return new URL(String(env.PUBLIC_SITE_ORIGIN || "")).origin; } catch (_) { return ""; }
+}
+function publicOriginOK(request, env) {
+  return Boolean(publicSiteOrigin(env)) && request.headers.get("Origin") === publicSiteOrigin(env);
+}
+function publicCorsHeaders(request, env) {
+  const origin = request.headers.get("Origin");
+  if (!origin || origin !== publicSiteOrigin(env)) return {};
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "Content-Type",
+    "access-control-max-age": "600",
+    "vary": "Origin",
+  };
+}
+function israelDateAndMinutes(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jerusalem",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value);
+  const fields = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return {
+    date: `${fields.year}-${fields.month}-${fields.day}`,
+    minutes: Number(fields.hour) * 60 + Number(fields.minute),
+  };
+}
+function israelOffset(targetDate) {
+  const noon = new Date(`${targetDate}T12:00:00Z`);
+  const zonePart = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", timeZoneName: "shortOffset" })
+    .formatToParts(noon).find((part) => part.type === "timeZoneName")?.value || "GMT+3";
+  const match = zonePart.match(/^GMT([+-])(\d{1,2})(?::(\d{2}))?$/);
+  return match ? `${match[1]}${String(match[2]).padStart(2, "0")}:${match[3] || "00"}` : "+03:00";
+}
 function csrfRequired(request) {
   return ["POST", "PATCH", "DELETE"].includes(request.method);
 }
@@ -470,12 +510,7 @@ async function alarmProfilePayload(env, profileId) {
 function overrideExpiry(targetDate) {
   // Expiry is the end of the target day in Israel. Resolve the offset instead
   // of hard-coding +03:00 so one-time commands remain correct across DST.
-  const noon = new Date(`${targetDate}T12:00:00Z`);
-  const zonePart = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", timeZoneName: "shortOffset" })
-    .formatToParts(noon).find((part) => part.type === "timeZoneName")?.value || "GMT+3";
-  const match = zonePart.match(/^GMT([+-])(\d{1,2})(?::(\d{2}))?$/);
-  const offset = match ? `${match[1]}${String(match[2]).padStart(2, "0")}:${match[3] || "00"}` : "+03:00";
-  return new Date(`${targetDate}T23:59:59${offset}`).toISOString();
+  return new Date(`${targetDate}T23:59:59${israelOffset(targetDate)}`).toISOString();
 }
 
 function validTargetDate(value) {
@@ -639,6 +674,43 @@ export default {
         acknowledged += Number(result.meta?.changes || 0);
       }
       return json({ acknowledged });
+    }
+    const publicAlarmCommand = url.pathname.match(/^\/public\/profiles\/([^/]+)\/alarm-command$/);
+    if (publicAlarmCommand) {
+      const cors = publicCorsHeaders(request, env);
+      if (!publicOriginOK(request, env)) return json({ error: "origin rejected" }, 403);
+      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+      if (request.method !== "POST") return json({ error: "method not allowed" }, 405, cors);
+      let publicId = "";
+      try { publicId = decodeURIComponent(publicAlarmCommand[1]); } catch (_) { return json({ error: "invalid profile" }, 400, cors); }
+      if (!/^[A-Za-z0-9_-]{8,80}$/.test(publicId)) return json({ error: "invalid profile" }, 400, cors);
+      const requestKey = await hash(`${request.headers.get("CF-Connecting-IP") || "unknown"}:${publicId}`);
+      if (!(await rateLimit(env, `public-alarm:${requestKey}`, 8, 3600))) return json({ error: "alarm change rate limit reached" }, 429, cors);
+      const row = await env.DB.prepare("SELECT id, public_id FROM profiles WHERE public_id=?1 AND active=1").bind(publicId).first();
+      if (!row) return json({ error: "profile not found" }, 404, cors);
+      const body = await request.json().catch(() => ({}));
+      const action = String(body?.action || "");
+      if (!["clear", "set"].includes(action)) return json({ error: "action must be clear or set" }, 400, cors);
+      const today = israelDateAndMinutes();
+      let wakeAt = null;
+      let wakeTime = null;
+      if (action === "set") {
+        wakeTime = String(body?.wake_time || "");
+        if (!validClock(wakeTime, false)) return json({ error: "wake_time must use HH:MM" }, 400, cors);
+        if (Number(wakeTime.slice(0, 2)) * 60 + Number(wakeTime.slice(3)) <= today.minutes) {
+          return json({ error: "choose a future time today" }, 400, cors);
+        }
+        wakeAt = `${today.date}T${wakeTime}:00${israelOffset(today.date)}`;
+      }
+      const timestamp = now();
+      const id = crypto.randomUUID();
+      await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at) VALUES(?1, ?2, ?3, ?4, ?5, NULL, 0, ?6, ?7, ?8) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=NULL, force=0, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, published_at=NULL, consumed_at=NULL")
+        .bind(id, row.id, today.date, action, wakeAt, "Student self-service alarm change", timestamp, overrideExpiry(today.date)).run();
+      await writeAudit(env, row.id, `alarm-command-${action}`, { target_date: today.date, wake_time: wakeTime, source: "public-profile" }, "student");
+      try { await triggerPublish(env, row.id); } catch (_) {
+        return json({ error: "Your alarm change was saved, but publishing is temporarily unavailable." }, 503, cors);
+      }
+      return json({ status: "queued", action, target_date: today.date }, 202, { ...cors, "cache-control": "no-store" });
     }
     const check = await auth(request, env, csrfRequired(request)); if (check.error) return check.error;
     if (url.pathname === "/api/classes" && request.method === "GET") {

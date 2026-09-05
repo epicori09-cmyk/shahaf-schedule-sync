@@ -87,6 +87,7 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn("2026-08-27T06:30:00+03:00", html)
             self.assertIn("Today’s schedule", html)
             self.assertIn("scheduleAvailable", html)
+            self.assertNotIn('id="alarm-self-service"', html)
             self.assertEqual(data["changes"][0]["kind"], "cancelled")
             self.assertEqual(data["last_successful_sync"], "2026-08-27T06:30:00+03:00")
 
@@ -197,6 +198,10 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertEqual([item["sizes"] for item in manifest["icons"]], ["192x192", "512x512"])
             self.assertTrue((output / "sw.js").exists())
             self.assertEqual((output / "header-logo.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertIn('id="alarm-self-service"', html)
+            self.assertIn("Cancel / move my alarm for today", html)
+            self.assertIn("public/profiles/student-profile/alarm-command", html)
+            self.assertIn("This changes only this schedule’s alarm for today", html)
             for size in (180, 192, 512):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
