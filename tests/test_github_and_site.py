@@ -202,6 +202,7 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('id="alarm-scheduled-time"', html)
             self.assertIn('"alarmScheduled": "Scheduled for"', html)
             self.assertIn('let alarmState = activeProfile.wake || null;', html)
+            self.assertIn('"alarm_baseline"', html)
             self.assertIn("Cancel / move my next alarm", html)
             self.assertIn('id="alarm-restore"', html)
             self.assertIn("Restore correct time", html)

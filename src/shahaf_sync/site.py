@@ -606,6 +606,7 @@ def render_site(
                 # endpoint because public_profile is false there.
                 wake_data = dict(safe_transit_wake)
             wake_data["profile_id"] = profile_id
+            alarm_baseline = dict(wake_data)
             if alarm_settings:
                 wake_data = apply_alarm_controls(
                     wake_data,
@@ -622,6 +623,20 @@ def render_site(
         if public_profile:
             # The public page can show the same sanitized alarm state that the
             # Shortcut consumes. Do not add this to legacy/private profiles.
+            wake_data["alarm_baseline"] = {
+                key: alarm_baseline.get(key)
+                for key in (
+                    "next_school_day",
+                    "wake_time",
+                    "wake_at",
+                    "subject",
+                    "enabled",
+                    "shortcut_action",
+                    "fallback_status",
+                    "alarm_for_today",
+                    "stale",
+                )
+            }
             primary_profile["wake"] = wake_data
         data["wake"] = wake_data
     if safe_transit_wake is not None:

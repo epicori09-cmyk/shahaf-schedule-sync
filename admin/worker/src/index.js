@@ -625,10 +625,13 @@ function applyPublicAlarmOverride(wake, override) {
 }
 
 function createAlarmRestoreSnapshot(wake, targetDate) {
-  if (!wake || typeof wake !== "object" || Array.isArray(wake) || String(wake.next_school_day || "") !== targetDate) return null;
+  const baseline = wake?.alarm_baseline && typeof wake.alarm_baseline === "object" && !Array.isArray(wake.alarm_baseline)
+    ? wake.alarm_baseline
+    : wake;
+  if (!baseline || typeof baseline !== "object" || Array.isArray(baseline) || String(baseline.next_school_day || "") !== targetDate) return null;
   const snapshot = {};
   for (const key of ["next_school_day", "wake_time", "wake_at", "subject", "enabled", "shortcut_action", "fallback_status", "alarm_for_today", "stale"]) {
-    if (Object.prototype.hasOwnProperty.call(wake, key)) snapshot[key] = wake[key];
+    if (Object.prototype.hasOwnProperty.call(baseline, key)) snapshot[key] = baseline[key];
   }
   const serialized = JSON.stringify(snapshot);
   return serialized.length <= 20000 ? serialized : null;
@@ -647,10 +650,9 @@ function normalizedAlarmRestoreSnapshot(value, targetDate) {
 async function alarmRestoreSnapshot(env, publicId, targetDate, existingOverride = null) {
   const existing = normalizedAlarmRestoreSnapshot(existingOverride?.restore_json, targetDate);
   if (existing) return JSON.stringify(existing);
-  // Do not snapshot a Pages payload that may already contain a legacy manual
-  // override. Restore will remove that legacy row and let the normal sync
-  // recalculate the correct schedule alarm.
-  if (existingOverride) return null;
+  // New pages carry an alarm-only baseline alongside the effective payload.
+  // This lets Restore recover legacy overrides whose restore_json was created
+  // before snapshots existed, without trusting the already-overridden time.
   return createAlarmRestoreSnapshot(await fetchPublicWake(env, publicId), targetDate);
 }
 
