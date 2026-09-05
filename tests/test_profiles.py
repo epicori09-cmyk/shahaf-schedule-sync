@@ -4,7 +4,7 @@ from datetime import date, time
 import unittest
 
 from shahaf_sync.model import Lesson, PublishedChange, Exam
-from shahaf_sync.profiles import apply_changes, select_exams, select_lessons
+from shahaf_sync.profiles import apply_changes, select_changes, select_exams, select_lessons
 from shahaf_sync.ya1_schedule import build_ya1_schedule
 
 
@@ -24,6 +24,28 @@ SPEC = {
 
 
 class ProfileTests(unittest.TestCase):
+    def test_teacher_selector_matches_shahaf_first_last_name_order(self) -> None:
+        lessons = [
+            Lesson(date(2026, 9, 6), 2, time(9, 10), time(9, 50), "מדעי המחשב", "דנישבסקי יונתן", "")
+        ]
+        spec = {"selectors": [{"subject": "מדעי המחשב", "teacher": "יונתן דנישבסקי"}]}
+        selected = select_lessons(lessons, spec)
+        self.assertEqual(len(selected), 1)
+
+    def test_change_selector_matches_shahaf_first_last_name_order(self) -> None:
+        changes = [
+            PublishedChange(
+                date(2026, 9, 6),
+                2,
+                "",
+                "cancelled",
+                teacher="דנישבסקי יונתן",
+            )
+        ]
+        spec = {"selectors": [{"teacher": "יונתן דנישבסקי", "periods": [2]}]}
+        selected = select_changes(changes, spec)
+        self.assertEqual(selected, changes)
+
     def test_selects_confirmed_tracks_and_shared_lessons_only(self) -> None:
         lessons = [
             Lesson(date(2026, 9, 10), 1, time(8, 30), time(9, 10), "פיסיקה 1", "שגיא גיא", "308 מע׳ פיסיקה"),
