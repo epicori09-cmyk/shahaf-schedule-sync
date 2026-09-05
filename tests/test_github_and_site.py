@@ -170,6 +170,52 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('["now", "full", "exams"]', html)
             self.assertEqual(len(data["periods"]), 14)
 
+    def test_site_crosses_out_cancelled_schedule_slots_instead_of_calling_them_gaps(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-05T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[ChangeRecord("cancelled", date(2026, 9, 6), 2, "Math", "cancelled")],
+                stale=False,
+                schedule=[
+                    {
+                        "date": "2026-09-06",
+                        "period": 2,
+                        "subject": "Math",
+                        "teacher": "Teacher",
+                        "room": "101",
+                        "start": "09:10",
+                        "end": "09:50",
+                    }
+                ],
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            self.assertIn("cancelledByOccurrence", html)
+            self.assertIn('is-cancelled', html)
+            self.assertIn('text-decoration:line-through', html)
+            self.assertIn('!item && cancelled', html)
+            self.assertIn('emptyKind === "no-lesson" ? "noLesson" : "gap"', html)
+
+    def test_alarm_time_editor_has_a_non_overlapping_shrinkable_input(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Student schedule",
+                generated_at="2026-09-05T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[],
+                stale=False,
+                profile_id="student-profile",
+                public_profile=True,
+            )
+            html = (Path(directory) / "index.html").read_text(encoding="utf-8")
+            self.assertIn('grid-template-columns:minmax(0,1fr) auto', html)
+            self.assertIn('.alarm-time-row input{min-width:0', html)
+
     def test_service_worker_caches_data_for_weak_connection(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory)
