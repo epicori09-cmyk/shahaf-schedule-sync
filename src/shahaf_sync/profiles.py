@@ -200,7 +200,10 @@ def _selector_matches(lesson: Lesson, selector: dict[str, Any]) -> bool:
     room = selector.get("room")
     return (
         (not subject or _matches(lesson.subject, str(subject)))
-        and (not teacher or _matches(lesson.teacher, str(teacher)))
+        # Shahaf may publish a teacher as either first-name/last-name or
+        # last-name/first-name. Treat the person's token set as the identity
+        # while keeping subject and room matching exact.
+        and (not teacher or _person_matches(lesson.teacher, str(teacher)))
         and (not room or _matches(lesson.room, str(room)))
     )
 
@@ -247,7 +250,7 @@ def _change_matches(change: PublishedChange, spec: dict[str, Any]) -> bool:
         room = str(selector.get("room", ""))
         if subject and not _matches(change.subject, subject):
             continue
-        if change.teacher and teacher and not _matches(change.teacher, teacher):
+        if change.teacher and teacher and not _person_matches(change.teacher, teacher):
             continue
         if change.room and room and not _matches(change.room, room):
             continue
