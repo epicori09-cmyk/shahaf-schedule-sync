@@ -66,18 +66,26 @@ Source pages:
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
-The latest code commit before this documentation is `3152351`:
-`Show scheduled alarm time on student page` (following `f89efa0`, which made
-Restore return to the correct original alarm time, `fb90b9d`, which removed the
+The latest code commit before this documentation is `e84aa32`:
+`Recover legacy alarm restores from baseline` (following `3152351`, which
+showed the scheduled alarm time, `f89efa0`, which made Restore return to the
+correct original alarm time, `fb90b9d`, which removed the
 Keep-current alarm control, `f463fbd`, which removed the secondary alarm helper
 text, and `3579688`, which added the restore action).
 
-The last live Pages workflow verified in the chat was run `33983791072`,
-successful, for `3152351`. The Worker was deployed from the scheduled-alarm
-display code version `48680a50-d063-4505-b5e5-b35627893e77`, with the public
+The last live Pages workflow verified in the chat was run `33984390014`,
+successful, for `e84aa32`. The Worker was deployed from the legacy-restore
+baseline code version `565fcb16-4a57-4873-a03c-8494cebcfd04`, with the public
 per-profile alarm endpoint targeting the next scheduled school day. A
 docs-only commit does not change the generated site, but this workflow remains
 the repository's deployment verification path.
+
+The public managed `wake.json` now carries an alarm-only `alarm_baseline` beside
+the effective alarm state. It contains only schedule date/time and alarm
+decision fields, not names or home data. The Worker uses it to recover older
+clear/set overrides that were created before `restore_json` snapshots existed.
+Ori's live feed was checked after deployment and returned `set`, `06:45`, and
+`2026-09-06` in both Pages and Worker responses.
 
 The final live visual QA covered Nitai's active profile
 `Z1_SNYeGELFxRHXa0FQ0mA` in both `?lang=he` and `?lang=en`. Now, Schedule, and
@@ -208,7 +216,7 @@ public schedule endpoint and the background sync still republishes it.
 The reviewed iPhone Shortcut is documented in `SHORTCUT.md` and is named
 `Refresh School Wake Alarm`. Its exact main alarm label is:
 
-`Shahaf School Wake`
+`Shahaf`
 
 Its intended logic is:
 
@@ -216,10 +224,11 @@ Its intended logic is:
 2. Convert the URL contents to a Dictionary.
 3. Read `shortcut_action` from the original Dictionary.
 4. If it is `leave`, stop before touching alarms.
-5. Find Clock alarms whose Label is exactly `Shahaf School Wake`.
+5. Find Clock alarms whose Label is exactly `Shahaf`.
 6. Delete only that result if present.
 7. If `shortcut_action` is `clear`, stop after the labeled alarm is gone.
-8. Read `wake_at` from the original Dictionary, convert it to Dates, and
+8. Read `alarm_for_today`, convert it to Text, and stop when it is `No`.
+9. Read `wake_at` from the original Dictionary, convert it to Dates, and
    create one normal Clock alarm with the exact label.
 
 The Shortcut is meant for Ori's random managed יא-2 profile only. It does not
@@ -516,3 +525,9 @@ user explicitly authorizes it.
 the documentation commit was `70d45c1`; root יא-2, legacy `/ya1/`, and managed
 student profiles are separate. I will first check `git status`, the latest
 workflow run, and the live endpoints before making any changes.”
+The public managed `wake.json` now carries an alarm-only `alarm_baseline` beside
+the effective alarm state. It contains only schedule date/time and alarm
+decision fields, not names or home data. The Worker uses it to recover older
+clear/set overrides that were created before `restore_json` snapshots existed.
+Ori's live feed was checked after deployment and returned `set`, `06:45`, and
+`2026-09-06` in both Pages and Worker responses.

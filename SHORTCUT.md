@@ -16,8 +16,11 @@ flow, not a generated or inferred shortcut:
 5. **Find Alarms** where **Label is exactly** `Shahaf`.
 6. If the Find Alarms result has any value, **Delete Alarms**.
 7. If `AlarmAction` is `clear`, **Stop This Shortcut**.
-8. Get `wake_at` from `WakeData` → **Get Dates from Input**.
-9. **Create Alarm** for that date/time with label `Shahaf`.
+8. Get `alarm_for_today` from `WakeData` → **Get Text from Input** → set
+   `AlarmToday`.
+9. If `AlarmToday` is `No`, **Stop This Shortcut**.
+10. Get `wake_at` from `WakeData` → **Get Dates from Input**.
+11. **Create Alarm** for that date/time with label `Shahaf`.
 
 The configured student URL is intentionally not copied into this log because
 the public ID is the access path for that student's page. The fast Shortcut
@@ -31,10 +34,13 @@ public schedule endpoint.
 
 The student endpoint returns a JSON object with `shortcut_action`,
 `alarm_for_today` (a Boolean), and `wake_at` (an ISO-8601 timestamp). The
-Shortcut should not branch on `alarm_for_today`: `false` can simply mean that
-the endpoint is preparing the next valid school day. The endpoint-compatible
-flow keeps the `leave` and `clear` stop branches and creates the `wake_at`
-alarm whenever `shortcut_action` is `set`.
+currently installed Shortcut also checks `alarm_for_today` as text and stops
+when it is `No`. This is intentional: on Saturday, a Sunday `wake_at` would
+become a time-only Clock alarm whose next occurrence could be Saturday rather
+than Sunday. The daily automation will run again on Sunday, when the endpoint
+returns `alarm_for_today: true`, and then create the alarm. Do not remove this
+guard unless the Shortcut is redesigned to create a genuinely date-specific
+alarm and separately proves Friday/Saturday safety.
 
 The schedule and transit wake planners explicitly ignore Friday and Saturday
 dates (the Israeli weekend). Sunday remains a valid school day. When a valid
@@ -52,8 +58,7 @@ former root endpoint is archived and should no longer be used.
 ## Before testing
 
 Keep your existing 07:15 alarm enabled as the backup. Do not give that alarm
-the label `Shahaf School Wake`; the Shortcut deletes only alarms with that
-exact label.
+the label `Shahaf`; the Shortcut deletes only alarms with that exact label.
 
 ## Create the Shortcut
 
@@ -70,18 +75,20 @@ Add these actions in order:
    `is` and type `leave`. Inside the block, add **Stop Shortcut** (shown as
    **Stop This Shortcut** on some iOS versions).
 5. **Find Alarm** (shown as **Find Alarms** on some iOS versions). Add a
-   filter so **Label is exactly** `Shahaf School Wake`.
+   filter so **Label is exactly** `Shahaf`.
 6. Add **If** with the Find result and condition `has any value`. Inside it,
    add **Delete Alarms** using the Find result.
 7. Get the dictionary value for `shortcut_action` again, using the Dictionary
    output from step 2.
 8. Add **If**. Set it to `shortcut_action is clear`; inside it add
    **Stop Shortcut**.
-9. Get the dictionary value for `wake_at`, using the Dictionary output from
+9. Get `alarm_for_today` from the Dictionary output → **Get Text from Input**.
+10. Add **If**. If that text is `No`, add **Stop Shortcut**.
+11. Get the dictionary value for `wake_at`, using the Dictionary output from
    step 2.
-10. Use **Get Dates from Input** to turn `wake_at` into a Date.
-11. **Add Alarm** (shown as **Create Alarm** on some iOS versions) using that
-    Date/time. Set its label to exactly `Shahaf School Wake`; leave Repeat off.
+12. Use **Get Dates from Input** to turn `wake_at` into a Date.
+13. **Add Alarm** (shown as **Create Alarm** on some iOS versions) using that
+    Date/time. Set its label to exactly `Shahaf`; leave Repeat off.
 
 `shortcut_action` is deliberately plain text so the Shortcut avoids fragile
 Boolean pickers:
@@ -89,8 +96,9 @@ Boolean pickers:
 - `leave`: Shahaf data is stale or unavailable. Stop before touching alarms.
 - `clear`: no school today, or the wake time has already passed. Delete only
   the labeled school alarm, then stop.
-- `set`: a valid future school-day wake alarm (today or the next school day)
-  should be created.
+- `set`: a valid school-day wake alarm is available. The `alarm_for_today`
+  guard creates it only when the target is today, preventing a future
+  Sunday time from becoming a Friday or Saturday Clock occurrence.
 
 The schedule workflow uses NVIDIA NIM as an additional conservative gate for
 destructive cases. If NIM is unavailable or sees a possible exam/other
@@ -144,7 +152,7 @@ Use these actions in order:
 
 If `leave` is returned, the Shortcut stops before finding or deleting an
 alarm. If `clear` is returned, it deletes only the יא-1-labeled alarm. The
-main `Shahaf School Wake` alarm is never searched for by this Shortcut.
+main `Shahaf` alarm is never searched for by this Shortcut.
 
 Create two separate daily **Time of Day** automations at `05:00` and `06:45`,
 both running **Refresh Ya1 Transit Wake Alarm**. Turn off **Ask Before
@@ -155,6 +163,6 @@ existing 07:15 backup alarm enabled while testing.
 
 Run the Shortcut manually once while the backup alarm remains enabled. On a
 school day it should leave the backup alone and create one separately labeled
-`Shahaf School Wake` alarm at the returned `wake_time`. Run it again; there
+`Shahaf` alarm at the returned `wake_time`. Run it again; there
 should still be only one alarm with that label. Do not remove the 07:15 backup
 until several school mornings have succeeded.
