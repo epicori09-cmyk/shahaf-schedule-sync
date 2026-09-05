@@ -303,6 +303,8 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('id="alarm-restore"', html)
             self.assertIn("Restore correct time", html)
             self.assertIn("correct original wake time", html)
+            self.assertIn('card.classList.toggle("is-submitting", busy)', html)
+            self.assertIn('.alarm-action.is-loading::after', html)
             self.assertNotIn('id="alarm-keep-current"', html)
             self.assertNotIn("Keep current alarm", html)
             self.assertIn("public/profiles/student-profile/alarm-command", html)
@@ -312,7 +314,7 @@ class GithubAndSiteTests(unittest.TestCase):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
             self.assertIn("fonts/Heebo-400.ttf", (output / "sw.js").read_text(encoding="utf-8"))
-            self.assertIn("-v3", (output / "sw.js").read_text(encoding="utf-8"))
+            self.assertIn("-v4", (output / "sw.js").read_text(encoding="utf-8"))
             self.assertIn('"./header-logo.png"', (output / "sw.js").read_text(encoding="utf-8"))
 
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:

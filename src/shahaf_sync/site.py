@@ -71,9 +71,27 @@ def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bo
     (output_dir / "manifest.webmanifest").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    cache_name = f"shahaf-schedule-{safe_profile_id}-v3"
+    cache_name = f"shahaf-schedule-{safe_profile_id}-v4"
     service_worker = f'''const CACHE_NAME = {json.dumps(cache_name)};
 const APP_SHELL = ["./", "./index.html", "./data.json", "./manifest.webmanifest", "./header-logo.png", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png", "./fonts/Heebo-400.ttf", "./fonts/Heebo-500.ttf", "./fonts/Heebo-600.ttf", "./fonts/Heebo-700.ttf", "./fonts/Heebo-800.ttf"];
+
+const refreshNavigation = async (request, cache) => {{
+  try {{
+    const response = await fetch(request);
+    if (response.ok) await cache.put("./index.html", response.clone());
+  }} catch {{}}
+}};
+
+const refreshData = async (request, cache) => {{
+  try {{
+    const response = await fetch(request);
+    if (response.ok) {{
+      await cache.put("./data.json", response.clone());
+      return response;
+    }}
+  }} catch {{}}
+  return cache.match("./data.json");
+}};
 
 self.addEventListener("install", (event) => {{
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -92,16 +110,28 @@ self.addEventListener("activate", (event) => {{
 self.addEventListener("fetch", (event) => {{
   if (event.request.method !== "GET") return;
   const request = event.request;
+  const requestUrl = new URL(request.url);
   if (request.mode === "navigate") {{
     event.respondWith(
-      Promise.race([
-        fetch(request).then((response) => {{
-          if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", response.clone()));
+      caches.open(CACHE_NAME).then(async (cache) => {{
+        const cached = await cache.match("./index.html");
+        if (cached) {{
+          event.waitUntil(refreshNavigation(request, cache));
+          return cached;
+        }}
+        try {{
+          const response = await fetch(request);
+          if (response.ok) await cache.put("./index.html", response.clone());
           return response;
-        }}),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("network timeout")), 3500))
-      ]).catch(() => caches.match("./index.html"))
+        }} catch {{
+          return cache.match("./index.html");
+        }}
+      }})
     );
+    return;
+  }}
+  if (requestUrl.pathname.endsWith("/data.json")) {{
+    event.respondWith(caches.open(CACHE_NAME).then((cache) => refreshData(request, cache)));
     return;
   }}
   event.respondWith(caches.match(request).then((cached) => {{
@@ -762,7 +792,7 @@ html[dir="rtl"] .identity,html[dir="rtl"] .source,html[dir="rtl"] .view-switch,h
  .period-info>.period-range{{display:block;letter-spacing:-.02em}}
  .next-card .lesson-time bdi small{{display:inline;margin-top:0}}
  .view-panel-enter-next{{animation:view-in-next .46s cubic-bezier(.2,.8,.2,1) both}}.view-panel-enter-previous{{animation:view-in-previous .46s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-next{{animation:day-in-next .42s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-previous{{animation:day-in-previous .42s cubic-bezier(.2,.8,.2,1) both}}
- .alarm-self-service{{margin:18px 0 29px;padding:17px 18px;border:1px solid var(--line);border-radius:18px;background:var(--card);box-shadow:0 5px 16px #142b3508}}.alarm-self-service .section-title{{margin-bottom:9px}}.alarm-self-service .section-title h2{{font-size:21px}}.alarm-scheduled{{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 11px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--muted);font-size:12px}}.alarm-scheduled strong{{color:var(--ink);font-size:16px;letter-spacing:-.02em;direction:ltr;unicode-bidi:isolate;font-variant-numeric:tabular-nums;white-space:nowrap}}html[dir="rtl"] .alarm-scheduled{{direction:rtl}}.alarm-panel[hidden]{{display:none}}.alarm-help{{margin:0 0 13px;color:var(--muted);font-size:12px;line-height:1.4}}.alarm-actions{{display:grid;gap:9px}}.alarm-action{{min-height:42px;padding:10px 13px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-size:13px;font-weight:750;cursor:pointer;text-align:start}}.alarm-action-danger{{border-color:#f1d0d0;color:var(--red)}}.alarm-action:disabled,.alarm-self-service .small-button:disabled{{cursor:not-allowed;opacity:.55}}.alarm-time-row{{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px}}.alarm-time-row label{{grid-column:1 / -1;color:var(--muted);font-size:12px;font-weight:700}}.alarm-time-row input{{width:100%;min-width:0;min-height:42px;padding:8px 10px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-variant-numeric:tabular-nums}}.alarm-time-row button{{min-width:0;white-space:nowrap}}.alarm-time-row input:focus{{outline:3px solid #8ecdc055;border-color:#8ecdc0}}.alarm-status{{min-height:18px;margin:10px 0 0;color:var(--green);font-size:12px;line-height:1.4}}.alarm-status:empty{{display:none}}
+ .alarm-self-service{{margin:18px 0 29px;padding:17px 18px;border:1px solid var(--line);border-radius:18px;background:var(--card);box-shadow:0 5px 16px #142b3508}}.alarm-self-service .section-title{{margin-bottom:9px}}.alarm-self-service .section-title h2{{font-size:21px}}.alarm-scheduled{{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 11px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--muted);font-size:12px}}.alarm-scheduled strong{{color:var(--ink);font-size:16px;letter-spacing:-.02em;direction:ltr;unicode-bidi:isolate;font-variant-numeric:tabular-nums;white-space:nowrap}}html[dir="rtl"] .alarm-scheduled{{direction:rtl}}.alarm-panel[hidden]{{display:none}}.alarm-help{{margin:0 0 13px;color:var(--muted);font-size:12px;line-height:1.4}}.alarm-actions{{display:grid;gap:9px}}.alarm-action{{min-height:42px;padding:10px 13px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-size:13px;font-weight:750;cursor:pointer;text-align:start;transition:background-color .2s ease,border-color .2s ease,transform .2s ease}}.alarm-action-danger{{border-color:#f1d0d0;color:var(--red)}}.alarm-action:disabled,.alarm-self-service .small-button:disabled{{cursor:not-allowed;opacity:.55}}.alarm-action.is-loading{{position:relative;color:transparent;pointer-events:none}}.alarm-self-service .alarm-action.is-loading:disabled{{opacity:1}}.alarm-action.is-loading::after{{content:"";position:absolute;left:50%;top:50%;width:15px;height:15px;margin:-8px;border:2px solid var(--ink);border-top-color:transparent;border-radius:50%;animation:alarm-spin .7s linear infinite}}.alarm-action-danger.is-loading::after{{border-color:var(--red);border-top-color:transparent}}@keyframes alarm-spin{{to{{transform:rotate(360deg)}}}}.alarm-time-row{{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px}}.alarm-time-row label{{grid-column:1 / -1;color:var(--muted);font-size:12px;font-weight:700}}.alarm-time-row input{{width:100%;min-width:0;min-height:42px;padding:8px 10px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-variant-numeric:tabular-nums}}.alarm-time-row button{{min-width:0;white-space:nowrap}}.alarm-time-row input:focus{{outline:3px solid #8ecdc055;border-color:#8ecdc0}}.alarm-status{{min-height:18px;margin:10px 0 0;color:var(--green);font-size:12px;line-height:1.4}}.alarm-status:empty{{display:none}}
  {gate_css}
 </style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}{gate_script}<main class="app">
 <header class="topbar"><a class="identity" href="."><img class="mark" src="./header-logo.png" alt="" aria-hidden="true"><span><strong>My schedule</strong></span></a></header>
@@ -829,13 +859,20 @@ function installAlarmSelfService() {{
   const time = document.getElementById("alarm-move-time");
   const status = document.getElementById("alarm-self-service-status");
   const controls = [toggle, cancel, move, restore, time].filter(Boolean);
-  const setBusy = (busy) => controls.forEach((control) => {{ control.disabled = busy; }});
+  const actionButtons = {{ clear: cancel, set: move, restore }};
+  const setBusy = (busy, action = "") => {{
+    controls.forEach((control) => {{ control.disabled = busy; }});
+    card.classList.toggle("is-submitting", busy);
+    Object.entries(actionButtons).forEach(([name, control]) => {{
+      if (control) control.classList.toggle("is-loading", busy && name === action);
+    }});
+  }};
   const close = () => {{ panel.hidden = true; toggle.setAttribute("aria-expanded", "false"); }};
   const submit = async (action) => {{
     const payload = {{ action }};
     const messageKey = action === "clear" ? "alarmCancelQueued" : action === "restore" ? "alarmRestoreQueued" : "alarmMoveQueued";
     if (action === "set") payload.wake_time = time.value;
-    setBusy(true);
+    setBusy(true, action);
     if (status) status.textContent = tr("alarmSaving");
     try {{
       const response = await fetch(publicAlarmEndpoint, {{ method: "POST", mode: "cors", headers: {{ "content-type": "application/json" }}, body: JSON.stringify(payload) }});
@@ -963,6 +1000,31 @@ const baseRenderExams = renderExams; renderExams = () => {{ baseRenderExams(); l
 const baseRenderFullDay = renderFullDay; renderFullDay = (targetDate, direction) => {{ baseRenderFullDay(targetDate, direction); const summary = document.getElementById("selected-day-summary"); if (summary) {{ const count = document.querySelectorAll("#schedule-periods .has-lesson").length; summary.textContent = count + " " + (count === 1 ? tr("lessonSingular") : tr("lessons")) + " · " + tr("gapsIncluded"); }} localizeRenderedUi(); }};
 const baseRefreshLiveLessons = refreshLiveLessons; refreshLiveLessons = () => {{ baseRefreshLiveLessons(); localizeLiveState(); }};
 const baseRenderTransitWake = renderTransitWake; renderTransitWake = () => {{ baseRenderTransitWake(); localizeRenderedUi(); }};
+async function refreshDataInBackground() {{
+  try {{
+    const response = await fetch(`./data.json?refresh=${{Date.now()}}`, {{cache:"no-store"}});
+    if (!response.ok) return;
+    const latest = await response.json();
+    if (!latest || typeof latest !== "object") return;
+    if (Array.isArray(latest.schedule)) {{
+      schedule = latest.schedule;
+      scheduleAvailable = Boolean(latest.schedule_available);
+    }}
+    if (Array.isArray(latest.changes)) changes = latest.changes;
+    if (Array.isArray(latest.events)) events = latest.events;
+    if (Array.isArray(latest.exams)) exams = latest.exams;
+    renderChanges();
+    renderExams();
+    refreshLiveLessons();
+    if (!document.getElementById("full-view").hidden) {{
+      const dates = scheduleDates();
+      const today = nowInSchoolZone().date;
+      const target = dates.includes(selectedDayDate) ? selectedDayDate : dates.includes(today) ? today : dates[0];
+      if (target) renderFullDay(target);
+    }}
+    renderTransitWake();
+  }} catch {{}}
+}}
  document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => {{ const today = nowInSchoolZone().date; scheduleDates().includes(today) ? selectDay(today) : renderFullDay(today); }});
 function moveViewBy(delta) {{ const views = ["now", "full", "exams"]; const index = views.indexOf(currentView()); const target = index + delta; if (target >= 0 && target < views.length) setView(views[target]); }}
 function moveDayBy(delta) {{ const dates = scheduleDates(); const index = dates.indexOf(selectedDayDate); const target = index + delta; if (target >= 0 && target < dates.length) renderFullDay(dates[target], delta > 0 ? "next" : "previous"); }}
@@ -975,7 +1037,7 @@ attachSwipe(document.getElementById("full-day-content"), "days");
 attachSwipe(document.getElementById("now-view"), "views");
 attachSwipe(document.getElementById("changes-view"), "views");
 attachSwipe(document.getElementById("exams-view"), "views");
- renderScheduledAlarm(); installAlarmSelfService(); renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+ renderScheduledAlarm(); installAlarmSelfService(); renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); window.setTimeout(refreshDataInBackground, 0); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 </script></body></html>
 '''
     (output_dir / "index.html").write_text(html, encoding="utf-8")
