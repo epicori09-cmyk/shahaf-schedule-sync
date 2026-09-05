@@ -66,15 +66,16 @@ Source pages:
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
-The latest code commit before this documentation was `50b19ec`:
-`Preserve no-weekend alarm rule` (following `273b116`, which added the
-per-profile today alarm control).
+The latest code commit before this documentation is `73704f1`:
+`Target public alarm changes at next school day` (following `50b19ec`, which
+preserved the no-weekend alarm rule).
 
-The last live Pages workflow verified in the chat was run `33978464328`,
-successful, for `50b19ec`. The Worker was also deployed with the public
-per-profile alarm endpoint and the Friday/Saturday move guard. A docs-only
-commit does not change the generated site, but this workflow remains the
-repository's deployment verification path.
+The last live Pages workflow verified in the chat was run `33979792653`,
+successful, for `73704f1`. The Worker was deployed from the same code as
+version `7b40e093-0561-4abe-ba5e-bcd1ae9f31ad`, with the public per-profile
+alarm endpoint targeting the next scheduled school day. A docs-only commit
+does not change the generated site, but this workflow remains the repository's
+deployment verification path.
 
 ## What is live now
 
