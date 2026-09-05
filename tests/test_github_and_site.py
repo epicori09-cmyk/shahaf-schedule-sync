@@ -329,7 +329,7 @@ class GithubAndSiteTests(unittest.TestCase):
             manifest = json.loads((output / "manifest.webmanifest").read_text(encoding="utf-8"))
             self.assertIn('rel="icon" href="./icon.svg"', html)
             self.assertIn('sizes="180x180"', html)
-            self.assertIn('<img class="mark" src="./header-logo.png" alt="" aria-hidden="true">', html)
+            self.assertIn('<img class="mark" src="./header-logo.png" width="43" height="43" decoding="async" fetchpriority="low" alt="" aria-hidden="true">', html)
             self.assertEqual([item["sizes"] for item in manifest["icons"]], ["192x192", "512x512"])
             self.assertTrue((output / "sw.js").exists())
             self.assertEqual((output / "header-logo.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
@@ -354,7 +354,7 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
             self.assertIn("fonts/Heebo-400.ttf", (output / "sw.js").read_text(encoding="utf-8"))
             self.assertIn("-v5", (output / "sw.js").read_text(encoding="utf-8"))
-            self.assertIn('"./header-logo.png"', (output / "sw.js").read_text(encoding="utf-8"))
+            self.assertNotIn('"./header-logo.png"', (output / "sw.js").read_text(encoding="utf-8"))
 
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:
         with TemporaryDirectory() as directory:
