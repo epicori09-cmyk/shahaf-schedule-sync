@@ -586,9 +586,14 @@ function applyPublicAlarmOverride(wake, override) {
   const restoreSnapshot = normalizedAlarmRestoreSnapshot(override.restore_json, targetDate);
   if (restoreSnapshot) {
     const restored = { ...result };
-    for (const key of ["next_school_day", "wake_time", "wake_at", "subject", "enabled", "shortcut_action", "fallback_status", "alarm_for_today"]) {
-      if (Object.prototype.hasOwnProperty.call(restoreSnapshot, key)) restored[key] = restoreSnapshot[key];
-    }
+    restored.next_school_day = targetDate;
+    restored.wake_time = restoreSnapshot.wake_time;
+    restored.wake_at = restoreSnapshot.wake_at;
+    restored.subject = restoreSnapshot.subject || wake.subject || null;
+    restored.enabled = true;
+    restored.shortcut_action = "set";
+    restored.fallback_status = "restored-default";
+    if (Object.prototype.hasOwnProperty.call(restoreSnapshot, "alarm_for_today")) restored.alarm_for_today = restoreSnapshot.alarm_for_today;
     return restored;
   }
   if (action === "clear") {
@@ -634,14 +639,18 @@ function normalizedAlarmRestoreSnapshot(value, targetDate) {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) || String(snapshot.next_school_day || "") !== targetDate) return null;
   const unsafeStatuses = new Set(["stale", "unavailable", "no-safe-route", "wake-time-bound"]);
   const action = String(snapshot.shortcut_action || "leave");
-  if (!["set", "clear", "leave"].includes(action) || Boolean(snapshot.stale) || unsafeStatuses.has(String(snapshot.fallback_status || ""))) return null;
-  if (action === "set" && (!snapshot.wake_at || Number.isNaN(new Date(String(snapshot.wake_at)).getTime()))) return null;
+  if (action !== "set" || Boolean(snapshot.stale) || unsafeStatuses.has(String(snapshot.fallback_status || ""))) return null;
+  if (!snapshot.wake_time || !snapshot.wake_at || Number.isNaN(new Date(String(snapshot.wake_at)).getTime())) return null;
   return snapshot;
 }
 
 async function alarmRestoreSnapshot(env, publicId, targetDate, existingOverride = null) {
   const existing = normalizedAlarmRestoreSnapshot(existingOverride?.restore_json, targetDate);
   if (existing) return JSON.stringify(existing);
+  // Do not snapshot a Pages payload that may already contain a legacy manual
+  // override. Restore will remove that legacy row and let the normal sync
+  // recalculate the correct schedule alarm.
+  if (existingOverride) return null;
   return createAlarmRestoreSnapshot(await fetchPublicWake(env, publicId), targetDate);
 }
 
@@ -839,14 +848,14 @@ export default {
         const restoreSnapshot = normalizedAlarmRestoreSnapshot(restoreJson, targetDate);
         const timestamp = now();
         if (restoreSnapshot) {
-          const restoreAction = String(restoreSnapshot.shortcut_action || "leave");
-          const restoreWakeAt = restoreAction === "set" ? String(restoreSnapshot.wake_at) : null;
+          const restoreAction = "set";
+          const restoreWakeAt = String(restoreSnapshot.wake_at);
           await env.DB.prepare("UPDATE alarm_overrides SET action=?1, wake_at=?2, subject=?3, force=0, reason=?4, created_at=?5, expires_at=?6, published_at=NULL, consumed_at=NULL, restore_json=?7 WHERE id=?8 AND profile_id=?9")
-            .bind(restoreAction, restoreWakeAt, restoreSnapshot.subject ? String(restoreSnapshot.subject).slice(0, 120) : null, "Student restored the previous alarm state", timestamp, overrideExpiry(targetDate), JSON.stringify(restoreSnapshot), existingOverride.id, row.id).run();
+            .bind(restoreAction, restoreWakeAt, restoreSnapshot.subject ? String(restoreSnapshot.subject).slice(0, 120) : null, "Student restored the correct original alarm time", timestamp, overrideExpiry(targetDate), JSON.stringify(restoreSnapshot), existingOverride.id, row.id).run();
         } else {
           await env.DB.prepare("DELETE FROM alarm_overrides WHERE id=?1 AND profile_id=?2 AND consumed_at IS NULL").bind(existingOverride.id, row.id).run();
         }
-        await writeAudit(env, row.id, "alarm-command-restore", { target_date: targetDate, immediate: Boolean(restoreSnapshot), source: "public-profile" }, "student");
+        await writeAudit(env, row.id, "alarm-command-restore", { target_date: targetDate, immediate: Boolean(restoreSnapshot), mode: "correct-original-time", source: "public-profile" }, "student");
         try { await triggerPublish(env, row.id); } catch (_) {
           return json({ error: "Your restore request was saved, but publishing is temporarily unavailable." }, 503, cors);
         }

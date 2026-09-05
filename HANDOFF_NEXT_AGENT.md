@@ -67,9 +67,9 @@ Source pages:
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
 The latest code commit before this documentation is `fb90b9d`:
-`Remove keep current alarm control` (following `f463fbd`, which removed the
-secondary alarm helper text, and `3579688`, which added the restore previous
-alarm action).
+`Restore correct original alarm time` (following `fb90b9d`, which removed the
+Keep-current alarm control, `f463fbd`, which removed the secondary alarm helper
+text, and `3579688`, which added the restore action).
 
 The last live Pages workflow verified in the chat was run `33982430111`,
 successful, for `fb90b9d`. The Worker was deployed from the alarm-control code

@@ -140,16 +140,16 @@ class AlarmControlTests(unittest.TestCase):
         self.assertFalse(result["alarm_control"]["override_active"])
         self.assertTrue(result["alarm_control"]["override_pending"])
 
-    def test_restore_snapshot_returns_alarm_to_state_before_cancellation(self) -> None:
+    def test_restore_snapshot_returns_alarm_to_original_correct_time(self) -> None:
         result = apply_alarm_controls(
             {
                 "next_school_day": "2026-09-06",
-                "wake_time": None,
-                "wake_at": None,
-                "subject": None,
-                "enabled": False,
-                "shortcut_action": "clear",
-                "fallback_status": "manual-clear",
+                "wake_time": "06:10",
+                "wake_at": "2026-09-06T06:10:00+03:00",
+                "subject": "Moved lesson",
+                "enabled": True,
+                "shortcut_action": "set",
+                "fallback_status": "manual-set",
             },
             resolve_alarm_settings({}, {}, "profile-1"),
             override={
@@ -176,6 +176,7 @@ class AlarmControlTests(unittest.TestCase):
         self.assertEqual(result["subject"], "First lesson")
         self.assertTrue(result["enabled"])
         self.assertEqual(result["shortcut_action"], "set")
+        self.assertEqual(result["fallback_status"], "restored-default")
         self.assertTrue(result["alarm_control"]["override_active"])
 
 

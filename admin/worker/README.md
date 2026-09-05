@@ -60,11 +60,12 @@ triggers the normal Pages sync in the background. The fast Worker Shortcut
 feed can read the matching override immediately, so the student's Shortcut can
 apply the iPhone change without waiting for Pages; the Pages `wake.json` is
 reconciled afterward. Each change stores a small private snapshot of the
-pre-change alarm state. **Restore my alarm** uses that snapshot to put the
-same profile's next alarm back exactly as it was before the cancellation or
-move, then asks Pages to reconcile it. Older overrides created before restore
-snapshots existed use the normal queued reconciliation path. Friday and
-Saturday target dates remain protected by the normal no-weekend alarm logic.
+original alarm baseline. **Restore correct time** uses the first safe
+pre-change wake time to put the same profile's next alarm back at its correct
+original hour, regardless of later cancellation or move actions, then asks
+Pages to reconcile it. Older overrides created before restore snapshots
+existed use the normal queued reconciliation path. Friday and Saturday target
+dates remain protected by the normal no-weekend alarm logic.
 
 The dashboard supports preview, bulk pause/resume/reset/set/clear/leave
 commands, per-profile settings, expiring date overrides, audit history, and

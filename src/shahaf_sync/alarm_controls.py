@@ -222,16 +222,29 @@ def apply_alarm_controls(
             restore_action = str(restore_snapshot.get("shortcut_action") or "leave")
             unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}
             restore_unsafe = bool(restore_snapshot.get("stale")) or str(restore_snapshot.get("fallback_status") or "") in unsafe_statuses
-            restore_valid = restore_action in {"set", "clear", "leave"}
+            # Restore is deliberately a time reset, not a replay of an older
+            # clear/leave state. Only a safe original set alarm can be used
+            # immediately; legacy or no-alarm snapshots fall through to the
+            # normal override handling below.
+            restore_valid = restore_action == "set"
             if restore_action == "set":
                 try:
-                    restore_valid = restore_valid and datetime.fromisoformat(str(restore_snapshot.get("wake_at", "")).replace("Z", "+00:00")) is not None
+                    restore_valid = restore_valid and bool(restore_snapshot.get("wake_time")) and datetime.fromisoformat(str(restore_snapshot.get("wake_at", "")).replace("Z", "+00:00")) is not None
                 except ValueError:
                     restore_valid = False
             if restore_valid and not restore_unsafe:
-                for key in ("next_school_day", "wake_time", "wake_at", "subject", "enabled", "shortcut_action", "fallback_status", "alarm_for_today"):
-                    if key in restore_snapshot:
-                        result[key] = restore_snapshot[key]
+                result.update(
+                    {
+                        "next_school_day": result.get("next_school_day"),
+                        "wake_time": restore_snapshot["wake_time"],
+                        "wake_at": restore_snapshot["wake_at"],
+                        "subject": restore_snapshot.get("subject") or result.get("subject"),
+                        "enabled": True,
+                        "shortcut_action": "set",
+                        "fallback_status": "restored-default",
+                        "alarm_for_today": restore_snapshot.get("alarm_for_today", result.get("alarm_for_today")),
+                    }
+                )
                 result["alarm_control"]["override_active"] = True
                 result["alarm_control"]["override_pending"] = False
                 return result
