@@ -66,16 +66,26 @@ Source pages:
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
-The latest code commit before this documentation is `f463fbd`:
-`Remove secondary alarm helper text` (following `3579688`, which added the
-restore previous alarm action).
+The latest code commit before this documentation is `fb90b9d`:
+`Remove keep current alarm control` (following `f463fbd`, which removed the
+secondary alarm helper text, and `3579688`, which added the restore previous
+alarm action).
 
-The last live Pages workflow verified in the chat was run `33982103545`,
-successful, for `f463fbd`. The Worker was deployed from the alarm-control code
+The last live Pages workflow verified in the chat was run `33982430111`,
+successful, for `fb90b9d`. The Worker was deployed from the alarm-control code
 version `6c200a65-a25c-415f-aec8-0fd697f48913`, with the public per-profile
 alarm endpoint targeting the next scheduled school day. A docs-only commit
 does not change the generated site, but this workflow remains the repository's
 deployment verification path.
+
+The final live visual QA covered Nitai's active profile
+`Z1_SNYeGELFxRHXa0FQ0mA` in both `?lang=he` and `?lang=en`. Now, Schedule, and
+Exams were opened in each language; Schedule day selection and return-to-Now
+were also exercised. The alarm panel showed Cancel, Move, and Restore only,
+with no visible helper/status copy or Keep-current control. No mutating alarm
+action was pressed. There is no committed screenshot baseline, so formal
+baseline comparison remains an INCONCLUSIVE boundary even though the live
+visual inspection was clean.
 
 ## What is live now
 
