@@ -252,6 +252,9 @@ function israelDateAndMinutes(value = new Date()) {
     minutes: Number(fields.hour) * 60 + Number(fields.minute),
   };
 }
+function israelIsWeekend(value = new Date()) {
+  return new Set(["Fri", "Sat"]).has(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", weekday: "short" }).format(value));
+}
 function israelOffset(targetDate) {
   const noon = new Date(`${targetDate}T12:00:00Z`);
   const zonePart = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", timeZoneName: "shortOffset" })
@@ -695,6 +698,7 @@ export default {
       let wakeAt = null;
       let wakeTime = null;
       if (action === "set") {
+        if (israelIsWeekend()) return json({ error: "No alarm can be moved on Friday or Saturday." }, 400, cors);
         wakeTime = String(body?.wake_time || "");
         if (!validClock(wakeTime, false)) return json({ error: "wake_time must use HH:MM" }, 400, cors);
         if (Number(wakeTime.slice(0, 2)) * 60 + Number(wakeTime.slice(3)) <= today.minutes) {
