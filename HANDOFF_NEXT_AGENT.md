@@ -66,13 +66,15 @@ Source pages:
 - Main ICS subscription Gist raw URL is documented in `README.md`; its
   unpinned raw URL must remain unpinned so future Gist revisions are followed.
 
-The latest code commit before this documentation was `70d45c1`:
-`Refine swipe zones and show async days`.
+The latest code commit before this documentation was `50b19ec`:
+`Preserve no-weekend alarm rule` (following `273b116`, which added the
+per-profile today alarm control).
 
-The last live Pages workflow verified in the chat was run `33894546867`,
-successful, for that commit. The preceding typography/navigation deployment
-was run `33893000583`, also successful. A docs-only commit should not trigger
-the schedule sync or write the Gist.
+The last live Pages workflow verified in the chat was run `33978464328`,
+successful, for `50b19ec`. The Worker was also deployed with the public
+per-profile alarm endpoint and the Friday/Saturday move guard. A docs-only
+commit does not change the generated site, but this workflow remains the
+repository's deployment verification path.
 
 ## What is live now
 
