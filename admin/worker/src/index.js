@@ -859,7 +859,7 @@ export default {
         try { await triggerPublish(env, row.id); } catch (_) {
           return json({ error: "Your restore request was saved, but publishing is temporarily unavailable." }, 503, cors);
         }
-        return json({ status: "queued", action, target_date: targetDate, immediate: Boolean(restoreSnapshot) }, 202, { ...cors, "cache-control": "no-store" });
+        return json({ status: "queued", action, target_date: targetDate, wake_time: restoreSnapshot?.wake_time || null, immediate: Boolean(restoreSnapshot) }, 202, { ...cors, "cache-control": "no-store" });
       }
       let wakeAt = null;
       let wakeTime = null;
@@ -881,7 +881,7 @@ export default {
       try { await triggerPublish(env, row.id); } catch (_) {
         return json({ error: "Your alarm change was saved, but publishing is temporarily unavailable." }, 503, cors);
       }
-      return json({ status: "queued", action, target_date: targetDate }, 202, { ...cors, "cache-control": "no-store" });
+      return json({ status: "queued", action, target_date: targetDate, wake_time: wakeTime }, 202, { ...cors, "cache-control": "no-store" });
     }
     const check = await auth(request, env, csrfRequired(request)); if (check.error) return check.error;
     if (url.pathname === "/api/classes" && request.method === "GET") {
