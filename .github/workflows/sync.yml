@@ -47,6 +47,31 @@ jobs:
           PROFILE_SYNC_TOKEN: ${{ secrets.PROFILE_SYNC_TOKEN }}
         run: python scripts/fetch_managed_profiles.py --output "$RUNNER_TEMP/managed-profiles.json"
 
+      - name: Resolve Ori managed profile URL
+        id: ori_profile
+        if: steps.profiles.outcome == 'success'
+        env:
+          PROFILE_BUNDLE: ${{ runner.temp }}/managed-profiles.json
+        run: |
+          profile_id="$(python - "$PROFILE_BUNDLE" <<'PY'
+          import json
+          import sys
+
+          bundle = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          matches = []
+          for record in bundle.get("profiles", []):
+              package = record.get("package", {})
+              shahaf = package.get("shahaf", {}) if isinstance(package, dict) else {}
+              if str(shahaf.get("class_id")) == "11" and int(shahaf.get("class_number", 0)) == 2:
+                  matches.append(str(record.get("public_id", "")))
+          if len(matches) == 1 and matches[0]:
+              print(matches[0])
+          PY
+          )"
+          if [ -n "$profile_id" ]; then
+            echo "schedule_data_url=https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/${profile_id}/data.json" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run Shahaf sync
         id: sync
         if: steps.profiles.outcome == 'success'
@@ -58,12 +83,12 @@ jobs:
         run: PYTHONPATH=src python -m shahaf_sync --config config.json --profiles-file "$RUNNER_TEMP/managed-profiles.json"
 
       - name: Update Alexa wake-up reminder
-        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success'
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.ori_profile.outputs.schedule_data_url != ''
         continue-on-error: true
         env:
           ALEXA_API_ENDPOINT: ${{ secrets.ALEXA_API_ENDPOINT }}
           ALEXA_LWA_ACCESS_TOKEN: ${{ secrets.ALEXA_LWA_ACCESS_TOKEN }}
-          SCHEDULE_DATA_URL: https://epicori09-cmyk.github.io/shahaf-schedule-sync/data.json
+          SCHEDULE_DATA_URL: ${{ steps.ori_profile.outputs.schedule_data_url }}
         run: PYTHONPATH=src python scripts/update_alexa_reminder.py
 
       - name: Upload Pages artifact

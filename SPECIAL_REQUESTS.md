@@ -4,10 +4,11 @@ This file records behavior requested specifically for this project. It is
 additive to the general architecture and safety rules in
 `HANDOFF_NEXT_AGENT.md`.
 
-## Ori / main יא-2 wake alarm
+## Ori / random managed יא-2 profile wake alarm
 
-- Scope: the root profile and root `wake.json` only. Do not apply this rule to
-  Ya1 or to managed student profiles.
+- Scope: Ori's canonical random managed profile only. Do not apply this rule to
+  Ya1 or to other managed student profiles.
+- Current verified profile ID: `d1yQtOSfobdzGs0XfzJlNw`.
 - When Ori's first confirmed lesson starts at **07:45**, the wake alarm must
   be **06:45** Israel time.
 - For every other first-lesson start, keep the normal configured wake rule
@@ -15,6 +16,9 @@ additive to the general architecture and safety rules in
   is added).
 - The configured rule lives in `config.json` under
   `special_requests.wake_time_by_first_lesson_start`.
+- The former root profile is archived after the canonical managed profile is
+  found. Its old `data.json` and `wake.json` are not published; the root page
+  only redirects to the random profile.
 
 ## Israeli weekend alarms
 

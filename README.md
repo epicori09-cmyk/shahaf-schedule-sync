@@ -11,6 +11,11 @@ Daily, fail-closed synchronization from Ostrovsky’s public Shahaf timetable in
 
 The unpinned URL is important: a revision-pinned raw URL will not follow future Gist updates.
 
+Ori's current private-by-obscurity managed profile is published at
+`https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/`.
+Its Shortcut endpoint is the same path with `wake.json`. The former root
+profile is archived and redirects to this generated profile.
+
 The sync reads only Shahaf's explicit, date-specific changes feed. It does not
 compare the whole-school timetable, which contains parallel major groups and
 would create false cancellations for a personal calendar. An empty changes
@@ -80,7 +85,8 @@ to patch the configured Gist. GitHub Gist history provides the rollback point.
 ## Alexa wake-up reminder
 
 The optional Alexa integration is documented in [`alexa/README.md`](alexa/README.md).
-It uses the public `site/data.json` schedule and a 75-minute preparation buffer.
+It uses Ori's public random-profile `site/students/d1yQtOSfobdzGs0XfzJlNw/data.json`
+schedule and a 75-minute preparation buffer.
 The GitHub workflow updates Alexa only when `ALEXA_LWA_ACCESS_TOKEN` is present;
 otherwise that step safely skips. Create the first managed reminder from the
 Alexa skill before enabling the repository secret. Keep the existing iPhone
@@ -99,11 +105,13 @@ The dry run reads the live public source and Gist but does not call the Gist upd
 
 ## Free iPhone wake alarm
 
-The Master יא-2 profile also publishes a safe wake payload at
-`site/wake.json`. It contains the next valid school day, the first confirmed
-lesson, and the wake time 75 minutes earlier. Stale or unavailable data sets a
-fallback status and disables the payload so an iPhone Shortcut can leave the
-existing alarm unchanged. The complete setup is in [`SHORTCUT.md`](SHORTCUT.md).
+Ori's managed יא-2 profile publishes a safe wake payload at
+`site/students/d1yQtOSfobdzGs0XfzJlNw/wake.json`. It contains the next valid
+school day, the first confirmed lesson, and the calculated wake time. When the
+first lesson starts at 07:45, the configured special request sets the wake time
+to 06:45. Stale or unavailable data sets a fallback status and disables the
+payload so an iPhone Shortcut can leave the existing alarm unchanged. The
+complete setup is in [`SHORTCUT.md`](SHORTCUT.md).
 
 ## Multi-student profile admin
 

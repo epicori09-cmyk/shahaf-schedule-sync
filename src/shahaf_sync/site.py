@@ -17,6 +17,17 @@ from .reconcile import ChangeRecord
 
 PWA_ASSETS_DIR = Path(__file__).with_name("assets")
 ISRAEL_WEEKEND_WEEKDAYS = frozenset({4, 5})  # Friday and Saturday
+ARCHIVED_PROFILE_FILES = (
+    "data.json",
+    "wake.json",
+    "manifest.webmanifest",
+    "sw.js",
+    "header-logo.png",
+    "icon.svg",
+    "icon-180.png",
+    "icon-192.png",
+    "icon-512.png",
+)
 
 
 def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bool) -> None:
@@ -99,6 +110,43 @@ self.addEventListener("fetch", (event) => {{
 }});
 '''
     (output_dir / "sw.js").write_text(service_worker, encoding="utf-8")
+
+
+def archive_profile_site(output_dir: Path, destination: str) -> None:
+    """Replace an obsolete generated profile with a safe migration page."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ARCHIVED_PROFILE_FILES:
+        (output_dir / filename).unlink(missing_ok=True)
+    fonts_dir = output_dir / "fonts"
+    if fonts_dir.is_dir():
+        for child in fonts_dir.iterdir():
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+        try:
+            fonts_dir.rmdir()
+        except OSError:
+            pass
+    target = escape(destination, quote=True)
+    target_js = json.dumps(destination)
+    (output_dir / "index.html").write_text(
+        """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta http-equiv="refresh" content="0;url={target}">
+  <title>Schedule moved</title>
+</head>
+<body>
+  <p>This schedule moved to a private profile.</p>
+  <p><a href="{target}">Open the current schedule</a></p>
+  <script>location.replace({target_js});</script>
+</body>
+</html>
+""".format(target=target, target_js=target_js),
+        encoding="utf-8",
+    )
 
 
 def _record_to_dict(record: ChangeRecord) -> dict[str, Any]:

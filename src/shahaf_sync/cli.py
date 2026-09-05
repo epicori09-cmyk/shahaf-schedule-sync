@@ -21,7 +21,7 @@ from .profiles import apply_changes, lesson_to_dict, select_changes, select_exam
 from .profile_package import ProfilePackageError, build_package_schedule, package_to_spec, validate_package
 from .reconcile import ChangeRecord, reconcile_calendar, reconcile_event_entries
 from .shahaf import ShahafSourceError, parse_changes_html, parse_events_html, parse_exams_html, parse_timetable_html
-from .site import build_schedule, build_wake_data, render_site
+from .site import archive_profile_site, build_schedule, build_wake_data, render_site
 from .transit import (
     TransitSourceError,
     build_ya1_transit_wake,
@@ -547,6 +547,29 @@ def _managed_specs(path: Path | None) -> list[dict[str, object]]:
     return result
 
 
+def _canonical_managed_profile_id(
+    profiles: list[dict[str, object]],
+    specs_by_id: dict[str, dict[str, object]],
+    config: Config,
+) -> str | None:
+    """Find the one managed profile replacing the former root profile."""
+    matches: list[str] = []
+    for profile in profiles:
+        profile_id = str(profile.get("id", ""))
+        spec = specs_by_id.get(profile_id, {})
+        if not profile_id or not spec.get("managed_profile") or not profile.get("active", True):
+            continue
+        if str(profile.get("class_id", "")) != str(config.class_id):
+            continue
+        try:
+            class_number = int(spec.get("class_number", 0))
+        except (TypeError, ValueError):
+            continue
+        if class_number == config.class_number:
+            matches.append(profile_id)
+    return matches[0] if len(matches) == 1 else None
+
+
 def execute(
     root: Path,
     config: Config,
@@ -791,30 +814,39 @@ def execute(
                 if profile_spec.get("managed_profile"):
                     for key in ("origin_address", "origin", "origin_coordinates"):
                         profile["transit_wake"].pop(key, None)
-        render_site(
-            site_path,
-            title=config.site_title,
-            generated_at=current.isoformat(),
-            source_url=source_url,
-            source_updated=snapshot.update_text,
-            changes=changes,
-            stale=False,
-            last_successful_sync=current.isoformat(),
-            schedule=schedule,
-            exams=root_exams,
-            events=root_event_processing.events,
-            events_available=True,
-            events_source_updated=event_snapshot.update_text,
-            now=current,
-            alarm_safety=alarm_safety,
-            alarm_safety_reason=alarm_safety_reason,
-            wake_time_by_first_lesson_start=(
-                config.special_requests.get("wake_time_by_first_lesson_start")
-                if isinstance(config.special_requests, dict)
-                and isinstance(config.special_requests.get("wake_time_by_first_lesson_start"), dict)
-                else None
-            ),
+        canonical_profile_id = _canonical_managed_profile_id(
+            profile_views,
+            profile_specs_by_id,
+            config,
         )
+        root_wake_rules = (
+            config.special_requests.get("wake_time_by_first_lesson_start")
+            if isinstance(config.special_requests, dict)
+            and isinstance(config.special_requests.get("wake_time_by_first_lesson_start"), dict)
+            else None
+        )
+        if canonical_profile_id:
+            archive_profile_site(site_path, f"students/{canonical_profile_id}/")
+        else:
+            render_site(
+                site_path,
+                title=config.site_title,
+                generated_at=current.isoformat(),
+                source_url=source_url,
+                source_updated=snapshot.update_text,
+                changes=changes,
+                stale=False,
+                last_successful_sync=current.isoformat(),
+                schedule=schedule,
+                exams=root_exams,
+                events=root_event_processing.events,
+                events_available=True,
+                events_source_updated=event_snapshot.update_text,
+                now=current,
+                alarm_safety=alarm_safety,
+                alarm_safety_reason=alarm_safety_reason,
+                wake_time_by_first_lesson_start=root_wake_rules,
+            )
         for profile in profile_views:
             profile_spec = profile_specs_by_id.get(str(profile.get("id")), {})
             managed = bool(profile_spec.get("managed_profile"))
@@ -824,6 +856,11 @@ def execute(
             profile_exams = profile.get("exams") if profile.get("exams_available") else None
             profile_events = profile.get("events") if profile.get("events_available") else None
             profile_output = site_path / "students" / str(profile.get("id")) if managed else ya1_site_path
+            profile_wake_rules = (
+                root_wake_rules
+                if managed and str(profile.get("id")) == canonical_profile_id
+                else None
+            )
             render_site(
                 profile_output,
                 title="Student schedule" if managed else str(profile.get("label", "Ostrovsky Grade 11-1")),
@@ -852,6 +889,7 @@ def execute(
                 transit_wake=profile.get("transit_wake") if isinstance(profile.get("transit_wake"), dict) else None,
                 alarm_settings=profile_spec.get("alarm_settings") if managed and isinstance(profile_spec.get("alarm_settings"), dict) else None,
                 alarm_override=profile_spec.get("alarm_override") if managed and isinstance(profile_spec.get("alarm_override"), dict) else None,
+                wake_time_by_first_lesson_start=profile_wake_rules,
             )
         print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes

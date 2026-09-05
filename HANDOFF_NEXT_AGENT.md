@@ -11,12 +11,13 @@ multi-student profile system.
 
 The most important rule is scope isolation:
 
-- The root site and root `wake.json` are the main יא-2 schedule. The user
-  identifies this profile as Ori Fisher.
+- The random managed profile `d1yQtOSfobdzGs0XfzJlNw` is the canonical יא-2
+  schedule for Ori Fisher. The former root profile is archived and redirects
+  to it; root `data.json` and `wake.json` are no longer published.
 - `/ya1/` and `/ya1/wake.json` are the separate יא-1 schedule. The user
   identifies this profile as Shahar Mosseri.
-- Managed students under `/students/<random-id>/` are additive. They must not
-  alter the root יא-2 Gist, root wake alarm, or legacy יא-1 behavior.
+- Managed students under `/students/<random-id>/` remain scoped. Ori's managed
+  profile does not alter the root יא-2 Gist or legacy יא-1 behavior.
 - A student's cancellations, exams, selectors, route, alarm command, and
   public output must remain scoped to that student.
 - Do not put names, home addresses, home coordinates, API keys, tokens,
@@ -47,8 +48,9 @@ GitHub Pages site:
 
 Main endpoints:
 
-- Main schedule: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/`
-- Main wake JSON: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/wake.json`
+- Archived root redirect: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/`
+- Ori schedule: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/`
+- Ori wake JSON: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/wake.json`
 - יא-1 schedule: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/`
 - יא-1 transit wake JSON:
   `https://epicori09-cmyk.github.io/shahaf-schedule-sync/ya1/wake.json`
@@ -174,12 +176,12 @@ The app-first scheme is inferred from the iOS bundle identifier
 
 ## Alarm systems
 
-### Main יא-2 alarm
+### Ori managed יא-2 alarm
 
-The main public `wake.json` is based on the main profile only. Its core fields
-include the next valid school day, first confirmed lesson, calculated wake
-time, subject, `enabled`, `stale`, `fallback_status`, and plain-text
-`shortcut_action`.
+Ori's random managed `wake.json` is based on the canonical profile only. Its
+core fields include the next valid school day, first confirmed lesson,
+calculated wake time, subject, `enabled`, `stale`, `fallback_status`, and
+plain-text `shortcut_action`.
 
 The reviewed iPhone Shortcut is documented in `SHORTCUT.md` and is named
 `Refresh School Wake Alarm`. Its exact main alarm label is:
@@ -188,7 +190,7 @@ The reviewed iPhone Shortcut is documented in `SHORTCUT.md` and is named
 
 Its intended logic is:
 
-1. Fetch root `wake.json`.
+1. Fetch Ori's random managed `wake.json`.
 2. Convert the URL contents to a Dictionary.
 3. Read `shortcut_action` from the original Dictionary.
 4. If it is `leave`, stop before touching alarms.
@@ -198,8 +200,8 @@ Its intended logic is:
 8. Read `wake_at` from the original Dictionary, convert it to Dates, and
    create one normal Clock alarm with the exact label.
 
-The main Shortcut is meant for the main יא-2 profile only. It does not manage
-the יא-1 alarm or any managed-student alarm.
+The Shortcut is meant for Ori's random managed יא-2 profile only. It does not
+manage the יא-1 alarm or any other managed-student alarm.
 
 ### יא-1 transit alarm
 

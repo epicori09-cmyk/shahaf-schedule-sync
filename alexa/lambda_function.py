@@ -9,11 +9,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from html import escape
 import json
+import os
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 
-SCHEDULE_URL = "https://epicori09-cmyk.github.io/shahaf-schedule-sync/data.json"
+SCHEDULE_URL = os.environ.get(
+    "SCHEDULE_DATA_URL",
+    "https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/data.json",
+)
 ZONE = ZoneInfo("Asia/Jerusalem")
 BUFFER_MINUTES = 75
 MARKER = "School schedule wake-up."

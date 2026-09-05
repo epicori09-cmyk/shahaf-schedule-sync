@@ -10,7 +10,7 @@ from urllib.request import Request
 from shahaf_sync.github import GistClient, GitHubError
 from shahaf_sync.model import Exam
 from shahaf_sync.reconcile import ChangeRecord
-from shahaf_sync.site import build_wake_data, render_site
+from shahaf_sync.site import archive_profile_site, build_wake_data, render_site
 
 
 class FakeTransport:
@@ -598,6 +598,22 @@ class GithubAndSiteTests(unittest.TestCase):
             wake = json.loads((Path(directory) / "wake.json").read_text(encoding="utf-8"))
             self.assertEqual(wake["wake_time"], "07:15")
             self.assertEqual(wake["subject"], "Math")
+
+    def test_archive_profile_site_removes_old_payload_and_points_to_new_profile(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            for filename in ("data.json", "wake.json", "manifest.webmanifest", "sw.js", "icon.svg"):
+                (output / filename).write_text("obsolete", encoding="utf-8")
+            (output / "fonts").mkdir()
+            (output / "fonts" / "Heebo-400.ttf").write_text("obsolete", encoding="utf-8")
+            archive_profile_site(output, "students/random-id/")
+            self.assertFalse((output / "data.json").exists())
+            self.assertFalse((output / "wake.json").exists())
+            self.assertFalse((output / "sw.js").exists())
+            self.assertFalse((output / "fonts").exists())
+            html = (output / "index.html").read_text(encoding="utf-8")
+            self.assertIn("students/random-id/", html)
+            self.assertIn("location.replace(\"students/random-id/\")", html)
 
 
 if __name__ == "__main__":

@@ -38,12 +38,12 @@ response has no school on the current weekend, the default `clear` action
 removes only the app's exact labeled alarm; stale or uncertain responses still
 return `leave` so an existing alarm is preserved.
 
-The public endpoint is:
+The current Ori endpoint is:
 
-`https://epicori09-cmyk.github.io/shahaf-schedule-sync/wake.json`
+`https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/wake.json`
 
-It is intentionally based on the Master profile only (your יא-2 schedule),
-not the יא-1 profile.
+It is the randomly generated managed profile for Ori's יא-2 schedule. The
+former root endpoint is archived and should no longer be used.
 
 ## Before testing
 
@@ -57,7 +57,7 @@ In the Shortcuts app, create a shortcut named **Refresh School Wake Alarm**.
 Add these actions in order:
 
 1. **Get Contents of URL**
-   - URL: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/wake.json`
+   - URL: `https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/wake.json`
    - Method: `GET`
 2. **Get Dictionary from Input**.
 3. **Get Dictionary Value** for `shortcut_action` (using the Dictionary output

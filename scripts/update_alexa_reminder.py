@@ -41,7 +41,7 @@ def find_managed_reminder(reminders: list[dict]) -> dict | None:
 
 
 def main() -> int:
-    schedule_url = os.environ.get("SCHEDULE_DATA_URL", "https://epicori09-cmyk.github.io/shahaf-schedule-sync/data.json")
+    schedule_url = os.environ.get("SCHEDULE_DATA_URL", "https://epicori09-cmyk.github.io/shahaf-schedule-sync/students/d1yQtOSfobdzGs0XfzJlNw/data.json")
     endpoint = os.environ.get("ALEXA_API_ENDPOINT", "https://api.eu.amazonalexa.com")
     access_token = os.environ.get("ALEXA_LWA_ACCESS_TOKEN", "")
     if not access_token:
