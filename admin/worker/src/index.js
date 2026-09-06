@@ -584,7 +584,9 @@ function applyPublicAlarmOverride(wake, override) {
     },
   };
   const restoreSnapshot = normalizedAlarmRestoreSnapshot(override.restore_json, targetDate);
-  if (restoreSnapshot) {
+  // A normal set also stores the original baseline for Restore. Only treat it
+  // as a restore when the requested time is the saved original time.
+  if (restoreSnapshot && String(override.wake_at || "") === String(restoreSnapshot.wake_at || "")) {
     const restored = { ...result };
     restored.next_school_day = targetDate;
     restored.wake_time = restoreSnapshot.wake_time;
