@@ -75,6 +75,8 @@ class ProfilePackageTests(unittest.TestCase):
         value["weekly_schedule"][1]["room"] = None
         normalized = validate_package(value)
         self.assertIsNone(normalized["weekly_schedule"][1]["room"])
+        lessons = build_package_schedule(normalized, date(2026, 9, 6), date(2026, 9, 6))
+        self.assertEqual(lessons[0].room, "")
 
 
 if __name__ == "__main__":

@@ -332,7 +332,7 @@ def build_package_schedule(package: dict[str, Any], start_date: date, end_date: 
                     time.fromisoformat(row["end"]),
                     row["subject"],
                     row["teacher"],
-                    row["room"],
+                    row["room"] or "",
                 ))
         day += timedelta(days=1)
     return result
