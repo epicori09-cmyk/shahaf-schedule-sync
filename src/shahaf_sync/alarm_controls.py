@@ -218,7 +218,14 @@ def apply_alarm_controls(
                 restore_snapshot = json.loads(restore_snapshot)
             except json.JSONDecodeError:
                 restore_snapshot = None
-        if isinstance(restore_snapshot, Mapping) and restore_snapshot.get("next_school_day") == result.get("next_school_day"):
+        if (
+            isinstance(restore_snapshot, Mapping)
+            and restore_snapshot.get("next_school_day") == result.get("next_school_day")
+            and (
+                str(override.get("action") or "") == "clear"
+                or str(override.get("wake_at") or "") == str(restore_snapshot.get("wake_at") or "")
+            )
+        ):
             restore_action = str(restore_snapshot.get("shortcut_action") or "leave")
             unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}
             restore_unsafe = bool(restore_snapshot.get("stale")) or str(restore_snapshot.get("fallback_status") or "") in unsafe_statuses

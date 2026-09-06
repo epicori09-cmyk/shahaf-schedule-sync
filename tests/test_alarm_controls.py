@@ -179,6 +179,40 @@ class AlarmControlTests(unittest.TestCase):
         self.assertEqual(result["fallback_status"], "restored-default")
         self.assertTrue(result["alarm_control"]["override_active"])
 
+    def test_manual_set_with_restore_snapshot_keeps_requested_time(self) -> None:
+        result = apply_alarm_controls(
+            {
+                "next_school_day": "2026-09-07",
+                "wake_time": "08:05",
+                "wake_at": "2026-09-07T08:05:00+03:00",
+                "subject": "First lesson",
+                "enabled": True,
+                "shortcut_action": "set",
+                "fallback_status": "none",
+            },
+            resolve_alarm_settings({}, {}, "profile-1"),
+            override={
+                "target_date": "2026-09-07",
+                "action": "set",
+                "wake_at": "2026-09-07T06:25:00+03:00",
+                "restore_json": json.dumps(
+                    {
+                        "next_school_day": "2026-09-07",
+                        "wake_time": "08:05",
+                        "wake_at": "2026-09-07T08:05:00+03:00",
+                        "subject": "First lesson",
+                        "enabled": True,
+                        "shortcut_action": "set",
+                        "fallback_status": "none",
+                    }
+                ),
+                "expires_at": "2026-09-07T20:59:59Z",
+            },
+            now=datetime(2026, 9, 6, 5, 0, tzinfo=ISRAEL),
+        )
+        self.assertEqual(result["wake_time"], "06:25")
+        self.assertEqual(result["fallback_status"], "manual-set")
+
 
 if __name__ == "__main__":
     unittest.main()
