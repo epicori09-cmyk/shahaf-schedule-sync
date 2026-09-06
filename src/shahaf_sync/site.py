@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 from html import escape
 import json
 from pathlib import Path
+import re
 import shutil
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -32,6 +33,19 @@ ARCHIVED_PROFILE_FILES = (
     "icon-192.png",
     "icon-512.png",
 )
+
+_SUBJECT_CODE_SUFFIX = re.compile(r"\s*\[\d+\]\s*$")
+_CLASS_GROUP_SUFFIX = re.compile(
+    r'\s+י["״]?[אב]?\s*\d+(?:\s*[-–—]\s*י["״]?[אב]?\s*\d+)*\s*$'
+)
+
+
+def _display_subject(value: Any) -> str:
+    """Remove Shahaf's internal class/group suffixes from public lesson names."""
+    original = str(value or "").strip()
+    cleaned = _SUBJECT_CODE_SUFFIX.sub("", original)
+    cleaned = _CLASS_GROUP_SUFFIX.sub("", cleaned).strip()
+    return cleaned or original
 
 
 def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bool) -> None:
@@ -178,14 +192,14 @@ def _record_to_dict(record: ChangeRecord) -> dict[str, Any]:
             "kind": str(record.get("kind", "changed")),
             "date": str(record.get("date", "")),
             "period": int(record.get("period", 0)),
-            "subject": str(record.get("subject", "Schedule update")),
+            "subject": _display_subject(record.get("subject", "Schedule update")),
             "detail": str(record.get("detail", "")),
         }
     return {
         "kind": record.kind,
         "date": record.date.isoformat(),
         "period": record.period,
-        "subject": record.subject,
+        "subject": _display_subject(record.subject),
         "detail": record.detail,
     }
 
@@ -199,7 +213,7 @@ def _exam_to_dict(exam: Exam) -> dict[str, Any]:
             reminder_date = ""
         return {
             "date": exam_date,
-            "subject": str(exam.get("subject", "")),
+            "subject": _display_subject(exam.get("subject", "")),
             "start_period": int(exam.get("start_period", 0)),
             "end_period": int(exam.get("end_period", 0)),
             "detail": str(exam.get("detail", "")),
@@ -212,7 +226,7 @@ def _exam_to_dict(exam: Exam) -> dict[str, Any]:
         }
     return {
         "date": exam.date.isoformat(),
-        "subject": exam.subject,
+        "subject": _display_subject(exam.subject),
         "start_period": exam.start_period,
         "end_period": exam.end_period,
         "detail": exam.detail,
@@ -280,7 +294,7 @@ def _schedule_item(event: IcsEvent, occurrence: datetime) -> dict[str, Any]:
     return {
         "date": occurrence.date().isoformat(),
         "period": period,
-        "subject": event.subject,
+        "subject": _display_subject(event.subject),
         "teacher": _teacher(event),
         "room": event.location,
         "start": occurrence.strftime("%H:%M"),
@@ -547,7 +561,10 @@ def render_site(
     output_dir.mkdir(parents=True, exist_ok=True)
     is_pink = profile_id == "ya1" or public_profile
     _write_pwa_assets(output_dir, title, profile_id, pink=is_pink)
-    schedule_data = schedule or []
+    schedule_data = [
+        {**item, "subject": _display_subject(item.get("subject", ""))}
+        for item in (schedule or [])
+    ]
     visible_changes = [item for item in changes if not _change_is_past(item, now)]
     periods = _period_metadata()
     exams_data = [_exam_to_dict(item) for item in (exams or [])]

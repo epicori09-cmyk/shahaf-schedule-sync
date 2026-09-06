@@ -170,6 +170,30 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('["now", "full", "exams"]', html)
             self.assertEqual(len(data["periods"]), 14)
 
+    def test_site_removes_internal_class_groups_and_codes_from_subject_names(self) -> None:
+        with TemporaryDirectory() as directory:
+            render_site(
+                Path(directory),
+                title="Schedule",
+                generated_at="2026-09-06T07:00:00+03:00",
+                source_url="https://example.invalid",
+                source_updated="fresh",
+                changes=[ChangeRecord("cancelled", date(2026, 9, 7), 5, "מתמטיקה 5 יח״ל יא2-יא9 [11529]", "cancelled")],
+                stale=False,
+                schedule=[
+                    {"date": "2026-09-07", "period": 0, "subject": "תנ״ך יא2 [13237]", "teacher": "לוי דוד", "room": "217", "start": "07:45", "end": "08:25"},
+                    {"date": "2026-09-07", "period": 5, "subject": "מתמטיקה 5 יח״ל יא2-יא9 [11529]", "teacher": "כהן-רוזן סיגל", "room": "207", "start": "11:35", "end": "12:15"},
+                    {"date": "2026-09-08", "period": 0, "subject": "כימיה יא1-יא11 [2849]", "teacher": "לוין ליאה", "room": "314", "start": "07:45", "end": "08:25"},
+                ],
+            )
+            data = json.loads((Path(directory) / "data.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["subject"] for item in data["schedule"]],
+                ["תנ״ך", "מתמטיקה 5 יח״ל", "כימיה"],
+            )
+            self.assertEqual(data["changes"][0]["subject"], "מתמטיקה 5 יח״ל")
+            self.assertEqual(data["wake"]["subject"], "תנ״ך")
+
     def test_site_crosses_out_cancelled_schedule_slots_instead_of_calling_them_gaps(self) -> None:
         with TemporaryDirectory() as directory:
             render_site(
