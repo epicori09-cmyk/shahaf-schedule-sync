@@ -43,6 +43,27 @@ END:VCALENDAR\r
 
 
 class ExamTests(unittest.TestCase):
+    def test_parser_accepts_single_period_exam_rows(self) -> None:
+        html = EXAMS_HTML.replace(
+            '<li class="ChangesInfo">06.09.2026, <b>מבחן במתמטיקה</b> משיעור 4 עד שיעור 6 לכיתות: יא-1...יא-9, יא-11 בקבוצה של מתמטיקה</li>',
+            '<li class="ChangesInfo">08.11.2026,   שיעור 4 לכיתות: יא-1...יא-5, יא-7, יא-8, יא-11 בקבוצה של כהן אפי, חדר: י"א 7 - 214 <b>בוחן במתמטיקה - סמסטר ראשון בתיכון</b></li>',
+        )
+        snapshot = parse_exams_html(
+            html,
+            date(2026, 9, 2),
+            expected_class_number=2,
+            expected_class_id="11",
+            include_all=True,
+        )
+        self.assertTrue(
+            any(
+                item.date == date(2026, 11, 8)
+                and item.start_period == 4
+                and item.end_period == 4
+                for item in snapshot.exams
+            )
+        )
+
     def test_parser_keeps_personal_tracks_and_rejects_other_tracks(self) -> None:
         snapshot = parse_exams_html(EXAMS_HTML, date(2026, 9, 2), expected_class_number=2, expected_class_id="11")
         self.assertEqual(snapshot.update_text, "מעודכן ל: 02.09.2026, שעה: 11:17")

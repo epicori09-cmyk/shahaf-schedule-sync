@@ -732,10 +732,11 @@ def parse_exams_html(
         metadata_text = row.text()
         text = _node_text(row)
         date_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", metadata_text)
-        period_match = re.search(r"משיעור\s*(\d+)\s*עד\s*שיעור\s*(\d+)", metadata_text)
+        period_range_match = re.search(r"משיעור\s*(\d+)\s*עד\s*שיעור\s*(\d+)", metadata_text)
+        single_period_match = re.search(r"(?<![א-ת])שיעור\s*(\d+)", metadata_text)
         title = _first_tag_value(row, "b")
         class_match = re.search(r"לכיתות:\s*(.*?)(?:\s+בקבוצה\s+של\s+|$)", metadata_text)
-        if not date_match or not period_match or not title or not class_match:
+        if not date_match or not (period_range_match or single_period_match) or not title or not class_match:
             raise ShahafSourceError(f"Shahaf exam row has unsupported format: {text!r}")
         if not _class_number_includes(class_match.group(1), expected_class_number):
             continue
@@ -743,7 +744,10 @@ def parse_exams_html(
         if subject is None:
             continue
         exam_date = date(int(date_match.group(3)), int(date_match.group(2)), int(date_match.group(1)))
-        start_period, end_period = int(period_match.group(1)), int(period_match.group(2))
+        if period_range_match:
+            start_period, end_period = int(period_range_match.group(1)), int(period_range_match.group(2))
+        else:
+            start_period = end_period = int(single_period_match.group(1))
         if start_period not in PERIOD_TIMES or end_period not in PERIOD_TIMES or start_period > end_period:
             raise ShahafSourceError(f"Shahaf exam row has invalid period range: {text!r}")
         group_match = re.search(r"בקבוצה\s+של\s+(.+)$", metadata_text)
