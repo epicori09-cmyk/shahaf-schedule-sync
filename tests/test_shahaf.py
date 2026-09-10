@@ -72,6 +72,15 @@ EVENTS_HTML = """<!doctype html>
 
 
 class ShahafParserTests(unittest.TestCase):
+    def test_parses_single_period_event_rows(self) -> None:
+        html = EVENTS_HTML.replace(
+            '<li class="ChangesInfo">16.09.2026, <b>אסיפת הורים</b> משיעור 14 עד שיעור 21 לכיתות: יא-1...יא-9, יא-11, יא-12</li>',
+            '<li class="ChangesInfo">17.09.2026, שיעור 6 לכיתות: כל הכיתות <b>תרגיל ירי טילים</b></li>',
+        )
+        snapshot = parse_events_html(html, reference_date=date(2026, 9, 4), expected_class_id="11")
+        event = next(item for item in snapshot.events if item.title == "תרגיל ירי טילים")
+        self.assertEqual((event.start_period, event.end_period), (6, 6))
+
     def test_parses_dates_periods_lessons_and_update_timestamp(self) -> None:
         snapshot = parse_timetable_html(HTML, reference_date=date(2026, 9, 1))
         self.assertEqual(snapshot.update_text, "מעודכן ל: 01.09.2026, שעה: 06:00")

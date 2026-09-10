@@ -483,23 +483,27 @@ def parse_events_html(
         detail = re.sub(r"\s+", " ", _node_text(row)).strip()
         title = _first_tag_value(row, "b")
         date_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", metadata_text)
-        period_match = re.search(
+        period_range_match = re.search(
             r"משיעור\s*(\d+)\s*עד\s*שיעור\s*(\d+)", metadata_text, re.IGNORECASE
         )
+        single_period_match = re.search(r"(?<![א-ת])שיעור\s*(\d+)", metadata_text, re.IGNORECASE)
         clock_match = re.search(
             r"משעה\s*(\d{1,2}:\d{2})\s*עד\s*שעה\s*(\d{1,2}:\d{2})",
             metadata_text,
             re.IGNORECASE,
         )
         class_match = re.search(r"לכיתות:\s*(.*)$", metadata_text)
-        if not title or not date_match or not class_match or (not period_match and not clock_match):
+        if not title or not date_match or not class_match or (not period_range_match and not single_period_match and not clock_match):
             raise ShahafSourceError(f"Shahaf event row has unsupported format: {detail!r}")
 
         event_date = date(int(date_match.group(3)), int(date_match.group(2)), int(date_match.group(1)))
         start_period = end_period = None
         start_clock = end_clock = None
-        if period_match:
-            start_period, end_period = int(period_match.group(1)), int(period_match.group(2))
+        if period_range_match or single_period_match:
+            if period_range_match:
+                start_period, end_period = int(period_range_match.group(1)), int(period_range_match.group(2))
+            else:
+                start_period = end_period = int(single_period_match.group(1))
             # Shahaf uses periods beyond the regular lesson grid for events
             # such as parent meetings (for example 14–21). They are valid
             # overlays, but can never suppress lesson periods 0–13.
