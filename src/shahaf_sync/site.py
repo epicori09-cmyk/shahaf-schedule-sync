@@ -444,7 +444,7 @@ def build_wake_data(
                     "wake_at": fallback_at.isoformat(),
                     "subject": None,
                     "enabled": True,
-                    "shortcut_action": "set",
+                    "shortcut_action": "clear" if current.weekday() in ISRAEL_WEEKEND_WEEKDAYS else "set",
                     "fallback_status": "stale-fixed",
                 }
             )
@@ -511,7 +511,11 @@ def build_wake_data(
                 "alarm_for_today": school_day == today,
                 # The Shortcut runs before school and may need to create an
                 # alarm for tomorrow (for example on a no-school day today).
-                "shortcut_action": "set",
+                # Never publish a future Sunday set command on Friday or
+                # Saturday: iOS may interpret the time-only alarm as due on
+                # the current weekend day. Clear the labeled alarm first;
+                # Sunday will publish a set command for the actual school day.
+                "shortcut_action": "clear" if today.weekday() in ISRAEL_WEEKEND_WEEKDAYS else "set",
             }
         )
         if alarm_safety not in (None, "approved", "not-required"):

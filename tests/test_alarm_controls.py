@@ -36,14 +36,14 @@ class AlarmControlTests(unittest.TestCase):
             [{"date": "2026-09-06", "period": 1, "start": "08:30", "subject": "Math"}],
             schedule_available=True,
             stale=False,
-            now=datetime(2026, 9, 4, 5, 0, tzinfo=ISRAEL),
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=ISRAEL),
             buffer_minutes=80,
             round_to_minutes=5,
         )
         controlled = apply_alarm_controls(
             wake,
             resolve_alarm_settings({}, {"alarm_label": "Shahaf Test"}, "profile-1"),
-            now=datetime(2026, 9, 4, 5, 0, tzinfo=ISRAEL),
+            now=datetime(2026, 9, 3, 5, 0, tzinfo=ISRAEL),
         )
         self.assertEqual(controlled["wake_time"], "07:10")
         self.assertEqual(controlled["alarm_label"], "Shahaf Test")

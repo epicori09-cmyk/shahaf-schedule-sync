@@ -180,6 +180,7 @@ class GithubAndSiteTests(unittest.TestCase):
                 source_updated="fresh",
                 changes=[ChangeRecord("cancelled", date(2026, 9, 7), 5, "מתמטיקה 5 יח״ל יא2-יא9 [11529]", "cancelled")],
                 stale=False,
+                now=datetime(2026, 9, 6, 5, 0, tzinfo=timezone(timedelta(hours=3))),
                 schedule=[
                     {"date": "2026-09-07", "period": 0, "subject": "תנ״ך יא2 [13237]", "teacher": "לוי דוד", "room": "217", "start": "07:45", "end": "08:25"},
                     {"date": "2026-09-07", "period": 5, "subject": "מתמטיקה 5 יח״ל יא2-יא9 [11529]", "teacher": "כהן-רוזן סיגל", "room": "207", "start": "11:35", "end": "12:15"},
@@ -694,7 +695,7 @@ class GithubAndSiteTests(unittest.TestCase):
         )
         self.assertEqual(wake["wake_time"], "06:45")
         self.assertEqual(wake["wake_at"], "2026-09-06T06:45:00+03:00")
-        self.assertEqual(wake["shortcut_action"], "set")
+        self.assertEqual(wake["shortcut_action"], "clear")
 
     def test_wake_data_sets_a_future_alarm_for_tomorrow(self) -> None:
         wake = build_wake_data(
@@ -706,6 +707,32 @@ class GithubAndSiteTests(unittest.TestCase):
         self.assertEqual(wake["next_school_day"], "2026-09-06")
         self.assertFalse(wake["alarm_for_today"])
         self.assertEqual(wake["shortcut_action"], "set")
+
+    def test_wake_data_clears_weekend_alarm_instead_of_publishing_future_set(self) -> None:
+        wake = build_wake_data(
+            [
+                {"date": "2026-09-05", "period": 1, "start": "08:30", "subject": "Saturday"},
+                {"date": "2026-09-06", "period": 1, "start": "08:30", "subject": "Sunday"},
+            ],
+            schedule_available=True,
+            stale=False,
+            now=datetime(2026, 9, 5, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["next_school_day"], "2026-09-06")
+        self.assertEqual(wake["wake_time"], "07:15")
+        self.assertFalse(wake["alarm_for_today"])
+        self.assertEqual(wake["shortcut_action"], "clear")
+
+    def test_stale_fixed_wake_also_clears_on_weekends(self) -> None:
+        wake = build_wake_data(
+            [{"date": "2026-09-06", "period": 1, "start": "08:30", "subject": "Sunday"}],
+            schedule_available=True,
+            stale=True,
+            stale_policy="set_fixed",
+            now=datetime(2026, 9, 5, 5, 0, tzinfo=timezone(timedelta(hours=3))),
+        )
+        self.assertEqual(wake["next_school_day"], "2026-09-06")
+        self.assertEqual(wake["shortcut_action"], "clear")
 
     def test_wake_data_skips_friday_and_saturday_but_keeps_sunday(self) -> None:
         wake = build_wake_data(
