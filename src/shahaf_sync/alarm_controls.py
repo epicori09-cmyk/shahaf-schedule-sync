@@ -197,9 +197,15 @@ def apply_alarm_controls(
     result = dict(wake)
     current = now or datetime.now(timezone.utc)
     active_override = _override_is_active(override, current)
+    target_date = str(override.get("target_date") or "") if override else ""
+    target_date_end = str(override.get("target_date_end") or "") if override else ""
+    wake_date = str(result.get("next_school_day") or "")
+    override_covers_day = bool(target_date and wake_date == target_date)
+    if target_date_end and target_date <= wake_date <= target_date_end:
+        override_covers_day = True
     override_matches_day = active_override and (
-        not override.get("target_date")
-        or override.get("target_date") == result.get("next_school_day")
+        not target_date
+        or override_covers_day
     )
     result["alarm_label"] = str(settings.get("alarm_label") or "Shahaf")
     result["alarm_control"] = {
@@ -266,7 +272,7 @@ def apply_alarm_controls(
         elif action == "clear":
             result.update(
                 {
-                    "next_school_day": target_date,
+                    "next_school_day": result.get("next_school_day") or target_date,
                     "wake_time": None,
                     "wake_at": None,
                     "subject": None,

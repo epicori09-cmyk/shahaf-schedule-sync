@@ -140,6 +140,35 @@ class AlarmControlTests(unittest.TestCase):
         self.assertFalse(result["alarm_control"]["override_active"])
         self.assertTrue(result["alarm_control"]["override_pending"])
 
+    def test_clear_window_applies_inclusively_and_expires_after_end_date(self) -> None:
+        settings = resolve_alarm_settings({}, {}, "profile-1")
+        override = {
+            "target_date": "2026-09-21",
+            "target_date_end": "2026-10-04",
+            "action": "clear",
+            "expires_at": "2026-10-04T20:59:59Z",
+        }
+        for school_day in ("2026-09-21", "2026-10-04"):
+            result = apply_alarm_controls(
+                {"next_school_day": school_day, "wake_time": "06:45", "shortcut_action": "set"},
+                settings,
+                override=override,
+                now=datetime(2026, 9, 21, 5, 0, tzinfo=ISRAEL),
+            )
+            self.assertEqual(result["shortcut_action"], "clear")
+            self.assertTrue(result["alarm_control"]["override_active"])
+            self.assertEqual(result["next_school_day"], school_day)
+
+        expired = apply_alarm_controls(
+            {"next_school_day": "2026-10-05", "wake_time": "06:45", "shortcut_action": "set"},
+            settings,
+            override=override,
+            now=datetime(2026, 10, 5, 5, 0, tzinfo=ISRAEL),
+        )
+        self.assertEqual(expired["shortcut_action"], "set")
+        self.assertFalse(expired["alarm_control"]["override_active"])
+        self.assertTrue(expired["alarm_control"]["override_pending"] is False)
+
     def test_restore_snapshot_returns_alarm_to_original_correct_time(self) -> None:
         result = apply_alarm_controls(
             {

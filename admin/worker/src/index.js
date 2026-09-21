@@ -129,13 +129,13 @@ async function getProfileAlarmSettings(env, profileId) {
 }
 
 async function getPendingAlarmOverride(env, profileId) {
-  const row = await env.DB.prepare("SELECT id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND consumed_at IS NULL AND expires_at>=?2 ORDER BY created_at DESC LIMIT 1")
+  const row = await env.DB.prepare("SELECT id, profile_id, target_date, target_date_end, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND consumed_at IS NULL AND expires_at>=?2 ORDER BY created_at DESC LIMIT 1")
     .bind(profileId, now()).first();
   return row || null;
 }
 
 async function getAlarmOverrideForTarget(env, profileId, targetDate) {
-  const row = await env.DB.prepare("SELECT id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND target_date=?2 AND consumed_at IS NULL AND expires_at>=?3 LIMIT 1")
+  const row = await env.DB.prepare("SELECT id, profile_id, target_date, target_date_end, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND target_date=?2 AND consumed_at IS NULL AND expires_at>=?3 LIMIT 1")
     .bind(profileId, targetDate, now()).first();
   return row || null;
 }
@@ -571,8 +571,13 @@ async function fetchPublicWake(env, publicId) {
 function applyPublicAlarmOverride(wake, override) {
   if (!override) return wake;
   const targetDate = String(override.target_date || "");
+  const targetDateEnd = String(override.target_date_end || "");
   const action = String(override.action || "");
-  if (!validTargetDate(targetDate) || targetDate !== String(wake.next_school_day || "") || !["clear", "set", "leave"].includes(action)) return wake;
+  const wakeDate = String(wake.next_school_day || "");
+  const coversWakeDate = validTargetDate(targetDate) && (
+    targetDate === wakeDate || (validTargetDate(targetDateEnd) && targetDate <= wakeDate && wakeDate <= targetDateEnd)
+  );
+  if (!coversWakeDate || !["clear", "set", "leave"].includes(action)) return wake;
   const unsafeStatuses = new Set(["stale", "unavailable", "no-safe-route", "wake-time-bound"]);
   if ((Boolean(wake.stale) || unsafeStatuses.has(String(wake.fallback_status || ""))) && !Boolean(override.force)) return wake;
   const result = {

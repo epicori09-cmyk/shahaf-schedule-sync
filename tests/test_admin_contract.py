@@ -24,6 +24,7 @@ class AdminContractTests(unittest.TestCase):
         schema = (ROOT / "admin" / "worker" / "schema.sql").read_text(encoding="utf-8")
         migration = (ROOT / "admin" / "worker" / "migrations" / "0002_alarm_controls.sql").read_text(encoding="utf-8")
         restore_migration = (ROOT / "admin" / "worker" / "migrations" / "0003_alarm_restore.sql").read_text(encoding="utf-8")
+        window_migration = (ROOT / "admin" / "worker" / "migrations" / "0004_alarm_override_windows.sql").read_text(encoding="utf-8")
         for table in ("alarm_global_settings", "alarm_profile_settings", "alarm_settings_history", "alarm_overrides", "alarm_audit"):
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", schema)
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
@@ -31,6 +32,9 @@ class AdminContractTests(unittest.TestCase):
         self.assertIn("published_at TEXT", migration)
         self.assertIn("restore_json TEXT", schema)
         self.assertIn("ALTER TABLE alarm_overrides ADD COLUMN restore_json TEXT", restore_migration)
+        self.assertIn("target_date_end TEXT", schema)
+        self.assertIn("ALTER TABLE alarm_overrides ADD COLUMN target_date_end TEXT", window_migration)
+        self.assertIn("target_date_end", source)
 
     def test_workflow_fetches_profiles_without_committing_them_and_skips_failed_deploy(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "sync.yml").read_text(encoding="utf-8")

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS alarm_overrides (
   id TEXT PRIMARY KEY,
   profile_id TEXT NOT NULL,
   target_date TEXT NOT NULL,
+  target_date_end TEXT,
   action TEXT NOT NULL CHECK (action IN ('set', 'clear', 'leave')),
   wake_at TEXT,
   subject TEXT,
