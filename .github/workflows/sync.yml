@@ -108,15 +108,40 @@ jobs:
       - name: Deploy Pages site
         id: deployment
         if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retrying Pages deployment
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.deployment.outcome == 'failure'
+        run: sleep 8
+
+      - name: Retry Pages deployment
+        id: deployment_retry
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.deployment.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before final Pages deployment attempt
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome == 'failure'
+        run: sleep 20
+
+      - name: Final Pages deployment attempt
+        id: deployment_final
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome == 'failure'
+        continue-on-error: true
         uses: actions/deploy-pages@v4
 
       - name: Acknowledge managed alarm commands
-        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.deployment.outcome == 'success'
+        if: steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && (steps.deployment.outcome == 'success' || steps.deployment_retry.outcome == 'success' || steps.deployment_final.outcome == 'success')
         continue-on-error: true
         env:
           PROFILE_SYNC_URL: https://shahaf-profile-admin.trading-api-9de14d.workers.dev/internal/profiles
           PROFILE_SYNC_TOKEN: ${{ secrets.PROFILE_SYNC_TOKEN }}
         run: python scripts/ack_alarm_commands.py --profiles-file "$RUNNER_TEMP/managed-profiles.json"
+
+      - name: Fail workflow when Pages deployment failed after retries
+        if: always() && steps.profiles.outcome == 'success' && steps.sync.outcome == 'success' && steps.deployment.outcome != 'success' && steps.deployment_retry.outcome != 'success' && steps.deployment_final.outcome != 'success'
+        run: exit 1
 
       - name: Fail workflow when profile fetch or sync failed
         if: always() && (steps.profiles.outcome == 'failure' || steps.sync.outcome == 'failure')
