@@ -20,7 +20,7 @@ if not url or not token:
 try:
     payload = json.loads(args.profiles_file.read_text(encoding="utf-8"))
     profiles = payload.get("profiles", []) if isinstance(payload, dict) else []
-    ids = sorted({str(command["id"]) for item in profiles if isinstance(item, dict)
+    ids = sorted({str(command["id"]) for item in profiles if isinstance(item, dict) and item.get("active", True)
                   for command in (item.get("alarm_overrides") if isinstance(item.get("alarm_overrides"), list) else [item.get("alarm_override")])
                   if isinstance(command, dict) and command.get("id")})
 except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:

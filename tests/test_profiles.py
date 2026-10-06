@@ -24,6 +24,12 @@ SPEC = {
 
 
 class ProfileTests(unittest.TestCase):
+    def test_move_to_period_zero_keeps_zero_and_uses_its_earlier_times(self) -> None:
+        day = date(2026, 10, 7)
+        lesson = Lesson(day, 1, time(8, 30), time(9, 10), "Math", "Teacher", "")
+        moved = apply_changes([lesson], [PublishedChange(day, 1, "Math", "changed", new_period=0)])
+        self.assertEqual([(item.period, item.start, item.end) for item in moved], [(0, time(7, 45), time(8, 25))])
+
     def test_teacher_selector_matches_shahaf_first_last_name_order(self) -> None:
         lessons = [
             Lesson(date(2026, 9, 6), 2, time(9, 10), time(9, 50), "מדעי המחשב", "דנישבסקי יונתן", "")

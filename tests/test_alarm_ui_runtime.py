@@ -456,6 +456,7 @@ function previewEnvelope(profileId) {
     timezone: "Asia/Jerusalem",
     alarm_label: "Shahaf",
     alarm_control: {
+      command_version: "fixture-command-version",
       enabled: true,
       wake_buffer_minutes: 75,
       round_to_minutes: 1,
@@ -509,13 +510,15 @@ async function nestedPreviewSelection(html) {
   await getRefresh;
   assertPreviewState(app, "authoritative GET payload");
 
-  app = boot(html);
   app.document.byId("alarm-self-service-toggle").click();
   app.document.byId("alarm-move-time").value = "08:00";
   app.document.byId("alarm-move-today").click();
   await flush();
-  expectEqual(app.network.requests[0].options.method, "POST", "nested POST uses POST");
-  app.network.respond(0, { status: "queued", action: "set", wake: previewEnvelope("student-profile") });
+  expectEqual(app.network.requests[1].options.method, "POST", "nested POST uses POST");
+  const sent = JSON.parse(app.network.requests[1].options.body);
+  expectEqual(sent.target_date, "2026-10-07", "command fences the displayed date");
+  expectEqual(sent.command_version, "fixture-command-version", "command fences the displayed override version");
+  app.network.respond(1, { status: "queued", action: "set", wake: previewEnvelope("student-profile") });
   await flush();
   assertPreviewState(app, "command POST payload");
 

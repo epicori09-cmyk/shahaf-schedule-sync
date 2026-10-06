@@ -16,7 +16,7 @@ Transport = Callable[[Request], tuple[int, bytes]]
 
 def default_transport(request: Request) -> tuple[int, bytes]:
     try:
-        with urlopen(request, timeout=90) as response:
+        with urlopen(request, timeout=20) as response:
             return response.status, response.read()
     except (HTTPError, URLError) as exc:
         raise NimError(f"NVIDIA NIM request failed: {exc}") from exc

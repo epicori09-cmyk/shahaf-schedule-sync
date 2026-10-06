@@ -61,6 +61,37 @@ class NoCallNim:
 
 
 class CliEventIntegrationTests(unittest.TestCase):
+    def test_install_or_gist_failure_preserves_previous_students(self) -> None:
+        config = cli.Config("Asia/Jerusalem", "https://example.invalid/", "11", "gist", "school.ics", 21, "Schedule", "site", class_number=2)
+        event = ShahafEvent(date(2026, 9, 9), "יום למידה א-סינכרוני", start_period=0, end_period=14, class_numbers=(2,))
+        original_rename = Path.rename
+        for failure in ("rename", "gist"):
+            with self.subTest(failure=failure), TemporaryDirectory() as directory:
+                root = Path(directory)
+                old = root / "site" / "students"
+                old.mkdir(parents=True)
+                (old / "sentinel.txt").write_text("known-good", encoding="utf-8")
+                fake = FakeGistClient()
+                bundle = root / "managed.json"
+                bundle.write_text('{"profiles": []}', encoding="utf-8")
+                writes = []
+
+                def update(*args):
+                    writes.append(args)
+                    if failure == "gist":
+                        raise cli.GitHubError("remote write failed")
+
+                def rename(path, target):
+                    if failure == "rename" and path.name == "students" and path.parent.name.startswith(".shahaf-stage-"):
+                        raise OSError("local install failed")
+                    return original_rename(path, target)
+
+                with patch.object(cli, "GistClient", return_value=fake), patch.object(fake, "update_file", side_effect=update), patch.object(Path, "rename", rename), patch.object(cli, "fetch_source", return_value=(SourceSnapshot([], set(), "fresh", "changes", []), [])), patch.object(cli, "fetch_exams", return_value=ExamSnapshot([], "fresh", "exams")), patch.object(cli, "fetch_events", return_value=EventSnapshot([event], "fresh", "events")):
+                    with self.assertRaisesRegex((OSError, cli.SyncFailure), "local install failed" if failure == "rename" else "remote write failed"):
+                        cli.execute(root, config, now=datetime(2026, 9, 4, 5, tzinfo=ZoneInfo("Asia/Jerusalem")), managed_profiles_path=bundle)
+                self.assertEqual((old / "sentinel.txt").read_text(encoding="utf-8"), "known-good")
+                self.assertEqual(len(writes), 0 if failure == "rename" else 1)
+
     def test_explicit_async_learning_day_is_approved_without_nim(self) -> None:
         event = ShahafEvent(
             date(2026, 9, 9),

@@ -67,16 +67,42 @@ def _find_base_event(
     candidates: list[tuple[IcsEvent, datetime]] = []
     for event in calendar.events:
         if not event.is_recurring:
-            continue
-        if change.subject and subject_key(event.subject) != subject_key(change.subject):
-            continue
-        if not change.subject and change.teacher and _detail_key(_teacher(event)) != _detail_key(change.teacher):
+            # Only an added lesson created by this reconciler is eligible.
+            # Overlay events, overrides and personal one-offs are never targets.
+            if not (
+                change.kind == "cancelled"
+                and event.recurrence_id is None
+                and event.get("X-SHAHAF-AUTO") == "1"
+                and event.get("X-SHAHAF-EVENT") is None
+                and event.get("X-SHAHAF-EXAM") is None
+                and event.uid == _generated_uid(PublishedChange(
+                    change.date, change.period, event.subject, "added"
+                ))
+            ):
+                continue
+        if change.kind != "cancelled" and change.subject and subject_key(event.subject) != subject_key(change.subject):
             continue
         for occurrence in event.occurrences(start, end, include_exdates=True):
-            if occurrence.date() == change.date and event.period == change.period:
+            effective = event
+            if change.kind == "cancelled":
+                replacements = [item for item in calendar.events if item.uid == event.uid and item.recurrence_id == occurrence]
+                if len(replacements) > 1:
+                    continue
+                if replacements:
+                    effective = replacements[0]
+                if change.subject and subject_key(effective.subject) != subject_key(change.subject):
+                    continue
+                if change.teacher and _detail_key(_teacher(effective)) != _detail_key(change.teacher):
+                    continue
+            effective_date = occurrence.date() if effective.is_recurring else effective.start.date()
+            if effective_date == change.date and effective.period == change.period:
                 candidates.append((event, occurrence))
     if not candidates:
         return None
+    if change.kind == "cancelled":
+        # Cancellation identity must be unique; ordering or a UID must never
+        # decide which of two personal lessons to delete.
+        return candidates[0] if len(candidates) == 1 else None
 
     def score(item: tuple[IcsEvent, datetime]) -> tuple[int, int, str, str]:
         event = item[0]
@@ -95,7 +121,7 @@ def _find_base_event(
 
 
 def _target_times(change: PublishedChange, event: IcsEvent | None = None) -> tuple[time, time]:
-    target_period = change.new_period or change.period
+    target_period = change.new_period if change.new_period is not None else change.period
     default_times = PERIOD_TIMES.get(target_period)
     if event is not None and change.new_period is None and change.start is None and change.end is None:
         return event.start.time(), event.end.time()
@@ -154,8 +180,13 @@ def reconcile_calendar(
             if base is None:
                 continue
             event, occurrence = base
+            if not event.is_recurring:
+                calendar.events.remove(event)
+                calendar.dirty = True
+                changes.append(ChangeRecord("cancelled", change.date, change.period, change.subject or event.subject, _change_detail(change, "published cancellation")))
+                continue
             calendar.remove_auto_override(event.uid, occurrence)
-            if occurrence not in event.exdates():
+            if occurrence not in event.auto_exdates():
                 event.add_exdate(occurrence, automatic=True)
             changes.append(ChangeRecord("cancelled", change.date, change.period, change.subject or event.subject, _change_detail(change, "published cancellation")))
             continue
@@ -191,7 +222,7 @@ def reconcile_calendar(
         subject = change.subject or event.subject
         if occurrence in event.auto_exdates():
             event.remove_auto_exdate(occurrence)
-        target_period = change.new_period or change.period
+        target_period = change.new_period if change.new_period is not None else change.period
         start, end = _target_times(change, event)
         teacher = change.teacher if change.teacher is not None else _teacher(event)
         room = change.room if change.room is not None else event.location
@@ -240,6 +271,7 @@ def reconcile_event_entries(
     Event VEVENTs are additive and deterministic. Lesson exclusions are kept
     under a separate marker so they can never erase an ordinary cancellation.
     """
+    retained_event_exdates: set[tuple[str, datetime]] = set()
     for event in sorted(events, key=lambda item: (item.date, item.title)):
         if not (window_start <= event.date <= window_end) or not event.applies_to_class(class_number):
             continue
@@ -255,17 +287,35 @@ def reconcile_event_entries(
             for occurrence in occurrences:
                 if occurrence.date() != event.date:
                     continue
-                if decision_allows_suppression(decision) and event_overlaps_lesson(
-                    event, _event_lesson_data(base, occurrence)
-                ):
+                if not event_overlaps_lesson(event, _event_lesson_data(base, occurrence)):
+                    continue
+                if decision_allows_suppression(decision):
                     base.add_event_exdate(occurrence)
-                elif (
-                    decision is not None
-                    and str(decision_value(decision, "classification", "")) == "normal_school"
-                    and event_overlaps_lesson(event, _event_lesson_data(base, occurrence))
-                ):
-                    base.remove_event_exdate(occurrence)
+                    retained_event_exdates.add((base.uid, occurrence))
+                elif decision is None or str(decision_value(decision, "classification", "uncertain")) != "normal_school":
+                    # A missing or non-normal decision is uncertain. Keep an
+                    # existing suppression until a trustworthy event result
+                    # explicitly says that school is normal.
+                    if occurrence in base.event_exdates():
+                        retained_event_exdates.add((base.uid, occurrence))
 
+    # This function is reached only after a complete, successfully parsed
+    # event retrieval. Any marked occurrence not owned by a current event is
+    # therefore stale. remove_event_exdate() removes only the event-owned
+    # marker and leaves automatic/manual owners in place.
+    for base in list(calendar.events):
+        if base.recurrence_id is not None or base.period is None:
+            continue
+        for occurrence in sorted(base.event_exdates()):
+            if not (window_start <= occurrence.date() <= window_end):
+                continue
+            if (base.uid, occurrence) not in retained_event_exdates:
+                base.remove_event_exdate(occurrence)
+
+    for event in sorted(events, key=lambda item: (item.date, item.title)):
+        if not (window_start <= event.date <= window_end) or not event.applies_to_class(class_number):
+            continue
+        decision = decisions.get(event_key(event))
         window = event_window(event)
         if window is None:
             continue

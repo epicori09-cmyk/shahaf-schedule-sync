@@ -225,6 +225,7 @@ class AlarmControlTests(unittest.TestCase):
             },
             resolve_alarm_settings({}, {}, "profile-1"),
             override={
+                "reason": "Student restored the correct original alarm time",
                 "target_date": "2026-09-06",
                 "action": "set",
                 "wake_at": "2026-09-06T06:45:00+03:00",

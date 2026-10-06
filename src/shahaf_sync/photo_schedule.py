@@ -6,9 +6,10 @@ This is intentionally a one-time baseline migration.  The normal sync still
 applies date-scoped Shahaf changes on top of these recurring events.
 """
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import date, datetime, time
 import hashlib
+import re
 
 from .ics import Calendar, IcsEvent, _escape, format_datetime
 from .model import PERIOD_TIMES
@@ -88,6 +89,10 @@ def _event_teacher(event: IcsEvent) -> str:
         if line.strip().startswith("מורה:"):
             return line.split(":", 1)[1].strip()
     return ""
+
+
+def _teacher_key(value: str) -> str:
+    return " ".join(sorted(re.findall(r"[\w]+", value.casefold(), flags=re.UNICODE)))
 
 
 def _occurrence(day: date, period: int) -> datetime:
@@ -176,50 +181,40 @@ def rebuild_calendar(calendar: Calendar) -> Calendar:
     """Replace recurring weekly lessons with the screenshot timetable.
 
     Existing recurring UIDs are reused by slot where possible.  One-off events
-    (including special days) are kept byte-for-byte.  Full-day exclusions are
-    copied to every lesson on that weekday; a smaller manual exclusion stays on
-    its original period, while automatic Shahaf exclusions transfer only when
-    the teacher still matches.
+    (including special days) are kept byte-for-byte. Manual exclusions stay on
+    their original period; absence of old slots is not evidence of a full-day
+    closure. Automatic exclusions transfer only when the teacher still matches.
     """
 
     old_recurring = [event for event in calendar.events if event.is_recurring]
     old_by_slot: dict[tuple[int, int], IcsEvent] = {}
-    old_slot_counts: Counter[int] = Counter()
     manual_by_slot: defaultdict[tuple[int, int], set[date]] = defaultdict(set)
     auto_by_slot_teacher: defaultdict[tuple[int, int, str], set[date]] = defaultdict(set)
-    manual_date_counts: Counter[date] = Counter()
 
     for event in old_recurring:
         if event.period is None:
             continue
         slot = (event.start.weekday(), event.period)
-        old_by_slot.setdefault(slot, event)
-        old_slot_counts[event.start.weekday()] += 1
+        if slot in old_by_slot:
+            raise ValueError(f"Duplicate recurring lesson slot: weekday={slot[0]}, period={slot[1]}")
+        old_by_slot[slot] = event
         manual_dates = {item.date() for item in event.exdates() - event.auto_exdates()}
         for item in manual_dates:
             manual_by_slot[slot].add(item)
-            manual_date_counts[item] += 1
-        teacher = _event_teacher(event)
+        teacher = _teacher_key(_event_teacher(event))
         for item in event.auto_exdates():
             auto_by_slot_teacher[(slot[0], slot[1], teacher)].add(item.date())
-
-    global_dates_by_weekday: defaultdict[int, set[date]] = defaultdict(set)
-    for item, count in manual_date_counts.items():
-        weekday = item.weekday()
-        if count == old_slot_counts[weekday]:
-            global_dates_by_weekday[weekday].add(item)
 
     rebuilt: list[IcsEvent] = []
     for weekday, period, subject, teacher, room in PHOTO_WEEKLY_SCHEDULE:
         old = old_by_slot.get((weekday, period))
         event = _prepare_event(old, weekday, period, subject, teacher, room)
 
-        exclusions = set(global_dates_by_weekday[weekday])
-        exclusions.update(manual_by_slot[(weekday, period)])
+        exclusions = manual_by_slot[(weekday, period)]
         for item in sorted(exclusions):
             event.add_exdate(_occurrence(item, period), automatic=False)
 
-        matching_auto = auto_by_slot_teacher[(weekday, period, teacher)]
+        matching_auto = auto_by_slot_teacher[(weekday, period, _teacher_key(teacher))]
         for item in sorted(matching_auto):
             event.add_exdate(_occurrence(item, period), automatic=True)
         rebuilt.append(event)

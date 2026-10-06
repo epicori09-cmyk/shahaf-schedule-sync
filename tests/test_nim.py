@@ -3,11 +3,18 @@ from __future__ import annotations
 import json
 from urllib.request import Request
 import unittest
+from unittest.mock import patch
 
-from shahaf_sync.nim import NimError, NimSafetyClient
+from shahaf_sync.nim import NimError, NimSafetyClient, default_transport
 
 
 class NimTests(unittest.TestCase):
+    def test_network_timeout_is_bounded_and_fail_closed(self):
+        with patch("shahaf_sync.nim.urlopen", side_effect=TimeoutError("timed out")) as opened:
+            with self.assertRaises(TimeoutError):
+                default_transport(Request("https://example.invalid"))
+        self.assertEqual(opened.call_args.kwargs["timeout"], 20)
+
     def response_transport(self, content: str, seen: list[Request]):
         def transport(request: Request):
             seen.append(request)

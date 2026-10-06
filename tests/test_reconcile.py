@@ -46,6 +46,97 @@ MATH_ICS = ICS.replace(
 
 
 class ReconcileTests(unittest.TestCase):
+    def test_cancel_replacement_teacher_matches_effective_occurrence(self) -> None:
+        calendar = parse_calendar(ICS)
+        day = date(2026, 9, 6)
+        reconcile_calendar(calendar, self.snapshot([PublishedChange(day, 1, "ספרות", "changed", teacher="Replacement Teacher")]), day, day)
+        wrong = reconcile_calendar(calendar, self.snapshot([PublishedChange(day, 1, "ספרות", "cancelled", teacher="בר סבן")]), day, day)
+        self.assertEqual(wrong, [])
+        result = reconcile_calendar(calendar, self.snapshot([PublishedChange(day, 1, "ספרות", "cancelled", teacher="Teacher Replacement")]), day, day)
+        self.assertEqual([item.kind for item in result], ["cancelled"])
+        self.assertFalse(any(event.recurrence_id is not None for event in calendar.events))
+        self.assertIn(datetime(2026, 9, 6, 8, 30), calendar.events[0].auto_exdates())
+
+    def test_move_to_period_zero_uses_earliest_lesson_time(self) -> None:
+        calendar = parse_calendar(ICS)
+        day = date(2026, 9, 6)
+        reconcile_calendar(calendar, self.snapshot([PublishedChange(day, 1, "ספרות", "changed", new_period=0)]), day, day)
+        moved = next(event for event in calendar.events if event.recurrence_id is not None)
+        self.assertEqual((moved.period, moved.start.time(), moved.end.time()), (0, time(7, 45), time(8, 25)))
+
+    def test_cancel_moved_period_zero_matches_replacement_slot(self) -> None:
+        calendar = parse_calendar(ICS)
+        day = date(2026, 9, 6)
+        reconcile_calendar(calendar, self.snapshot([PublishedChange(day, 1, "ספרות", "changed", new_period=0)]), day, day)
+        result = reconcile_calendar(calendar, self.snapshot([PublishedChange(day, 0, "ספרות", "cancelled", teacher="סבן בר")]), day, day)
+        self.assertEqual([item.kind for item in result], ["cancelled"])
+        self.assertFalse(any(event.recurrence_id is not None for event in calendar.events))
+        self.assertIn(datetime(2026, 9, 6, 8, 30), calendar.events[0].auto_exdates())
+
+    def test_subject_cancellation_with_wrong_teacher_preserves_calendar(self) -> None:
+        calendar = parse_calendar(ICS)
+        result = reconcile_calendar(calendar, self.snapshot([
+            PublishedChange(date(2026, 9, 6), 1, "ספרות", "cancelled", teacher="Other Teacher")
+        ]), date(2026, 9, 6), date(2026, 9, 6))
+        self.assertEqual(result, [])
+        self.assertEqual(calendar.render(), ICS)
+
+    def test_equal_cancellation_candidates_preserve_calendar(self) -> None:
+        calendar = parse_calendar(ICS)
+        duplicate = parse_calendar(ICS.replace("lesson-1@example", "duplicate@example")).events[0]
+        calendar.events.append(duplicate)
+        result = reconcile_calendar(calendar, self.snapshot([
+            PublishedChange(date(2026, 9, 6), 1, "ספרות", "cancelled", teacher="סבן בר")
+        ]), date(2026, 9, 6), date(2026, 9, 6))
+        self.assertEqual(result, [])
+        self.assertTrue(all(not event.exdates() for event in calendar.events))
+
+    def test_added_one_off_cancellation_requires_exact_identity_and_ownership(self) -> None:
+        calendar = parse_calendar(ICS)
+        day = date(2026, 9, 6)
+        added = PublishedChange(day, 3, "Extra", "added", teacher="First Last")
+        reconcile_calendar(calendar, self.snapshot([added]), day, day)
+        generated = calendar.events[-1]
+        for wrong_change in (
+            PublishedChange(day, 3, "Extra", "cancelled", teacher="Wrong Teacher"),
+            PublishedChange(date(2026, 9, 13), 3, "Extra", "cancelled", teacher="First Last"),
+            PublishedChange(day, 4, "Extra", "cancelled", teacher="First Last"),
+            PublishedChange(day, 3, "Other", "cancelled", teacher="First Last"),
+        ):
+            result = reconcile_calendar(calendar, self.snapshot([
+                wrong_change
+            ]), day, date(2026, 9, 13))
+            self.assertEqual(result, [])
+            self.assertIn(generated, calendar.events)
+        result = reconcile_calendar(calendar, self.snapshot([
+            PublishedChange(day, 3, "Extra", "cancelled", teacher="Last First")
+        ]), day, day)
+        self.assertEqual([item.kind for item in result], ["cancelled"])
+        self.assertNotIn(generated, calendar.events)
+        self.assertEqual(calendar.events[0].uid, "lesson-1@example")
+
+    def test_matching_cancellation_uses_normalized_teacher_and_keeps_event_owner(self) -> None:
+        calendar = parse_calendar(ICS)
+        occurrence = datetime(2026, 9, 6, 8, 30)
+        calendar.events[0].add_event_exdate(occurrence)
+        result = reconcile_calendar(calendar, self.snapshot([
+            PublishedChange(occurrence.date(), 1, "ספרות", "cancelled", teacher="סבן בר")
+        ]), occurrence.date(), occurrence.date())
+        self.assertEqual([item.kind for item in result], ["cancelled"])
+        lesson = calendar.events[0]
+        lesson.remove_event_exdate(occurrence)
+        self.assertIn(occurrence, lesson.auto_exdates())
+        self.assertIn(occurrence, lesson.exdates())
+
+    def test_unowned_one_off_is_not_cancelled(self) -> None:
+        calendar = parse_calendar(ICS.replace("RRULE:FREQ=WEEKLY;UNTIL=20270618T205959Z\r\n", ""))
+        original = calendar.render()
+        result = reconcile_calendar(calendar, self.snapshot([
+            PublishedChange(date(2026, 9, 6), 1, "ספרות", "cancelled", teacher="סבן בר")
+        ]), date(2026, 9, 6), date(2026, 9, 6))
+        self.assertEqual(result, [])
+        self.assertEqual(calendar.render(), original)
+
     def snapshot(self, changes: list[PublishedChange]) -> SourceSnapshot:
         return SourceSnapshot(
             lessons=[],

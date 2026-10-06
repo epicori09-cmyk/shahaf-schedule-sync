@@ -389,7 +389,7 @@ def apply_changes(lessons: list[Lesson], changes: list[PublishedChange]) -> list
             continue
         index = matches[0]
         old = result[index]
-        target_period = change.new_period or old.period
+        target_period = change.new_period if change.new_period is not None else old.period
         default_start, default_end = PERIOD_TIMES.get(target_period, (old.start, old.end))
         result[index] = replace(
             old,
@@ -404,7 +404,8 @@ def apply_changes(lessons: list[Lesson], changes: list[PublishedChange]) -> list
 
 
 def _change_times(change: PublishedChange) -> tuple[time, time]:
-    default_start, default_end = PERIOD_TIMES.get(change.new_period or change.period, (time(0), time(0)))
+    target_period = change.new_period if change.new_period is not None else change.period
+    default_start, default_end = PERIOD_TIMES.get(target_period, (time(0), time(0)))
     return change.start or default_start, change.end or default_end
 
 

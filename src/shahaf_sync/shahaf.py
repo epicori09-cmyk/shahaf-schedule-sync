@@ -260,7 +260,19 @@ def parse_timetable_html(
     html: str,
     reference_date: date,
     source_url: str = "",
+    *,
+    require_complete_grid: bool = False,
+    expected_class_id: str | None = None,
 ) -> SourceSnapshot:
+    if expected_class_id is not None:
+        select_match = re.search(r"<select\b[^>]*\bname=[\"']cls[\"'][^>]*>(.*?)</select>", html, re.IGNORECASE | re.DOTALL)
+        selected = select_match and any(
+            re.search(rf"\bvalue=[\"']{re.escape(expected_class_id)}[\"']", attrs, re.IGNORECASE)
+            and re.search(r"\bselected(?:\s*=|\b)", attrs, re.IGNORECASE)
+            for attrs in re.findall(r"<option\b([^>]*)>", select_match.group(1), re.IGNORECASE)
+        )
+        if not selected:
+            raise ShahafSourceError(f"Shahaf timetable is not selected for class {expected_class_id}")
     table_match = re.search(
         r"<table[^>]*class=[\"'][^\"']*TTTable[^\"']*[\"'][^>]*>(.*?)</table>",
         html,
@@ -277,6 +289,8 @@ def parse_timetable_html(
     if len(header_matches) < 2:
         raise ShahafSourceError("Shahaf timetable has too few day headers")
     header_dates = {int(day): _date_from_header(fragment, reference_date) for day, fragment in header_matches}
+    if len(header_dates) != len(header_matches) or len(set(header_dates.values())) != len(header_dates):
+        raise ShahafSourceError("Shahaf timetable has duplicate day headers")
 
     update_match = re.search(
         r"<div[^>]*class=[\"']UpdateDate[\"'][^>]*>(.*?)</div>",
@@ -286,6 +300,7 @@ def parse_timetable_html(
     update_text = _plain(update_match.group(1)) if update_match else ""
     _validate_source_year(update_text, reference_date)
     lessons: list[Lesson] = []
+    seen_periods: set[int] = set()
     row_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", table, flags=re.IGNORECASE | re.DOTALL)
     for row in row_matches:
         name_match = re.search(
@@ -294,16 +309,26 @@ def parse_timetable_html(
         if not name_match:
             continue
         name_text = _plain(name_match.group(1))
+        # Shahaf uses an empty CName corner cell in the weekday header row.
+        # It is not a lesson period; malformed actual period rows still fail.
+        if not name_text and re.search(r"class=[\"']CTitle[\"']", row, re.IGNORECASE):
+            continue
         period_match = re.search(r"\b(\d+)\b", name_text)
         times = re.findall(r"\b(\d{1,2}:\d{2})\b", name_text)
         if not period_match or len(times) < 2:
             raise ShahafSourceError("Shahaf timetable period/time row is malformed")
         period = int(period_match.group(1))
+        if period in seen_periods:
+            raise ShahafSourceError("Shahaf timetable contains duplicate period rows")
+        seen_periods.add(period)
         cell_matches = re.findall(
             r"<td[^>]*class=[\"']TTCell[\"'][^>]*data-day=[\"'](\d+)[\"'][^>]*>(.*?)</td>",
             row,
             flags=re.IGNORECASE | re.DOTALL,
         )
+        row_days = [int(day) for day, _ in cell_matches]
+        if len(row_days) != len(set(row_days)) or set(row_days) != set(header_dates):
+            raise ShahafSourceError("Shahaf timetable row is incomplete or has duplicate day cells")
         for day_value, cell in cell_matches:
             day_number = int(day_value)
             if day_number not in header_dates:
@@ -331,6 +356,8 @@ def parse_timetable_html(
                         room,
                     )
                 )
+    if require_complete_grid and (not set(PERIOD_TIMES).issubset(seen_periods) or set(header_dates) != set(range(6))):
+        raise ShahafSourceError("Shahaf weekly timetable grid is incomplete")
     if not update_text:
         raise ShahafSourceError("Shahaf page has no update timestamp")
     if not lessons:
@@ -470,6 +497,8 @@ def parse_events_html(
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
+    if not select_match:
+        raise ShahafSourceError("Shahaf events page has no selected class identity")
     if select_match:
         selected_class = any(
             re.search(rf"\bvalue=[\"']{re.escape(expected_class_id)}[\"']", attrs, re.IGNORECASE)
@@ -722,6 +751,8 @@ def parse_exams_html(
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
+    if not select_match:
+        raise ShahafSourceError("Shahaf exams page has no selected class identity")
     if select_match:
         selected_class = any(
             re.search(rf"\bvalue=[\"']{re.escape(expected_class_id)}[\"']", attrs, re.IGNORECASE)

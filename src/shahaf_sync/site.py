@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 
 from .ics import Calendar, IcsEvent
 from .events import event_is_past
-from .alarm_controls import apply_alarm_controls, public_alarm_settings
+from .alarm_controls import apply_alarm_controls, public_alarm_settings, protect_clock_occurrence
+from .public_transit import public_transit_payload
 from .model import PERIOD_TIMES
 from .model import Exam
 from .reconcile import ChangeRecord
@@ -86,7 +87,7 @@ def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bo
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     cache_prefix = f"shahaf-schedule-{safe_profile_id}-"
-    cache_name = f"{cache_prefix}v6"
+    cache_name = f"{cache_prefix}v7"
     service_worker = f'''const CACHE_NAME = {json.dumps(cache_name)};
 const CACHE_PREFIX = {json.dumps(cache_prefix)};
 const PROFILE_ID = {json.dumps(profile_id)};
@@ -136,6 +137,12 @@ self.addEventListener("fetch", (event) => {{
   if (event.request.method !== "GET") return;
   const request = event.request;
   const requestUrl = new URL(request.url);
+  const scopeUrl = new URL("./", self.location.href);
+  // Clock commands must always reach the live service. CacheStorage does not
+  // honor HTTP no-store and would otherwise resurrect an older cancellation.
+  if (requestUrl.origin !== scopeUrl.origin || !requestUrl.pathname.startsWith(scopeUrl.pathname)) return;
+  const relativePath = requestUrl.pathname.slice(scopeUrl.pathname.length);
+  if (relativePath === "wake.json") return;
   if (request.mode === "navigate") {{
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {{
@@ -155,11 +162,13 @@ self.addEventListener("fetch", (event) => {{
     );
     return;
   }}
-  if (requestUrl.pathname.endsWith("/data.json")) {{
+  if (relativePath === "data.json") {{
     event.respondWith(caches.open(CACHE_NAME).then((cache) => refreshData(request, cache)));
     return;
   }}
-  event.respondWith(caches.match(request).then((cached) => {{
+  if (!APP_SHELL.includes("./" + relativePath) && relativePath !== "header-logo.png") return;
+  if (request.cache === "no-store") return;
+  event.respondWith(caches.open(CACHE_NAME).then((cache) => cache.match(request)).then((cached) => {{
     if (cached) return cached;
     return fetch(request).then((response) => {{
       if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
@@ -594,8 +603,7 @@ def render_site(
     visible_events = [item for item in events_data if not event_is_past(item, now)]
     safe_transit_wake = dict(transit_wake) if transit_wake is not None else None
     if public_profile and safe_transit_wake is not None:
-        for key in ("origin_address", "origin", "origin_coordinates"):
-            safe_transit_wake.pop(key, None)
+        safe_transit_wake = public_transit_payload(safe_transit_wake)
     primary_profile = {
         "id": profile_id,
         "label": profile_label,
@@ -731,6 +739,9 @@ def render_site(
             next_alarm["alarm_baseline"] = {key: next_baseline.get(key) for key in wake_data["alarm_baseline"]}
             next_alarm["alarm_control"]["settings"] = public_alarm_settings(alarm_settings or {})
             wake_data["next_alarm"] = next_alarm
+            wake_data = protect_clock_occurrence(wake_data, now=current,
+                no_lessons_policy=str((alarm_settings or {}).get("no_lessons_policy", "clear")))
+            primary_profile["wake"] = wake_data
         data["wake"] = wake_data
     if safe_transit_wake is not None:
         data["transit_wake"] = safe_transit_wake
@@ -992,7 +1003,7 @@ function installAlarmSelfService() {{
   }};
   const close = () => {{ panel.hidden = true; toggle.setAttribute("aria-expanded", "false"); }};
   const submit = async (action) => {{
-    const payload = {{ action }};
+    const payload = {{ action, target_date: alarmState?.next_school_day || "", command_version: alarmState?.alarm_control?.command_version || "" }};
     const messageKey = action === "clear" ? "alarmCancelQueued" : action === "restore" ? "alarmRestoreQueued" : "alarmMoveQueued";
     if (action === "set") payload.wake_time = time.value;
     setBusy(true, action);

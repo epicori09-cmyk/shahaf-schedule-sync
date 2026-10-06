@@ -7,7 +7,7 @@ Managed profiles receive an effective, already-resolved policy from the
 private Worker and publish only the small, safe subset needed by Shortcuts.
 """
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import json
 import math
 import re
@@ -206,7 +206,8 @@ def _weekend_guard(result: dict[str, Any], current: datetime, preview: bool) -> 
     except ValueError:
         target_weekend = True
     if target_weekend or (not preview and current.weekday() in {4, 5}):
-        result["shortcut_action"] = "leave" if result.get("stale") else "clear"
+        uncertain = bool(result.get("stale")) or result.get("fallback_status") in {"stale", "unavailable", "no-safe-route", "wake-time-bound", "unsafe-override-blocked"}
+        result["shortcut_action"] = "leave" if uncertain else "clear"
         result["enabled"] = False
         result["fallback_status"] = "weekend"
     return result
@@ -264,9 +265,24 @@ def apply_alarm_controls(
             and restore_snapshot.get("next_school_day") == result.get("next_school_day")
             and (
                 str(override.get("action") or "") == "set"
-                and str(override.get("wake_at") or "") == str(restore_snapshot.get("wake_at") or "")
+                and str(override.get("reason") or "").startswith("Student restored ")
             )
         ):
+            # A restore is not permission to replay an obsolete school plan.
+            # Renderers pass the current unmodified baseline; effective-feed
+            # callers may carry it explicitly. Legacy already-overridden
+            # inputs have no such evidence and retain their saved snapshot.
+            fresh_baseline = result.get("alarm_baseline")
+            if not isinstance(fresh_baseline, Mapping) and not str(result.get("fallback_status") or "").startswith("manual-"):
+                fresh_baseline = wake
+            if isinstance(fresh_baseline, Mapping):
+                restore_snapshot = fresh_baseline
+                if restore_snapshot.get("shortcut_action") != "set":
+                    unsafe = bool(restore_snapshot.get("stale")) or restore_snapshot.get("fallback_status") in {"stale", "unavailable", "no-safe-route", "wake-time-bound"}
+                    action = "leave" if unsafe else str(restore_snapshot.get("shortcut_action") or "leave")
+                    result.update(shortcut_action=action, enabled=False, wake_at=None, wake_time=None,
+                                  fallback_status=str(restore_snapshot.get("fallback_status") or "restore-blocked"))
+                    return _weekend_guard(result, current, preview)
             restore_action = str(restore_snapshot.get("shortcut_action") or "leave")
             unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}
             restore_unsafe = bool(result.get("stale")) or str(result.get("fallback_status") or "") in unsafe_statuses or bool(restore_snapshot.get("stale")) or str(restore_snapshot.get("fallback_status") or "") in unsafe_statuses
@@ -376,6 +392,42 @@ def apply_alarm_controls(
         result["shortcut_action"] = "leave"
 
     return _weekend_guard(result, current, preview)
+
+
+def protect_clock_occurrence(wake: Mapping[str, Any], *, now: datetime | None = None, no_lessons_policy: str = "clear") -> dict[str, Any]:
+    """Only create a time-only Clock alarm when its next ring matches the plan.
+
+    A future calendar date in wake_at does not make an iPhone alarm date-aware.
+    Planning previews are intentionally not passed through this root-feed guard.
+    """
+    result = dict(wake)
+    if result.get("shortcut_action") != "set":
+        return result
+    zone = ZoneInfo("Asia/Jerusalem")
+    current = now or datetime.now(zone)
+    current = current.astimezone(zone) if current.tzinfo else current.replace(tzinfo=zone)
+    try:
+        timestamp = datetime.fromisoformat(str(result.get("wake_at") or "").replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("wake timestamp must have an offset")
+        timestamp = timestamp.astimezone(zone)
+        if timestamp.date().isoformat() != result.get("next_school_day") or timestamp.second or timestamp.microsecond:
+            raise ValueError("wake timestamp must match the school date and minute")
+    except ValueError:
+        result.update(shortcut_action="leave", enabled=False, fallback_status="invalid-clock-time")
+        return result
+    if timestamp <= current:
+        result.update(shortcut_action="leave", enabled=False, fallback_status="elapsed-wake")
+        return result
+    next_ring = datetime.combine(current.date(), timestamp.time().replace(tzinfo=None), tzinfo=zone)
+    if next_ring <= current:
+        next_ring += timedelta(days=1)
+    if current.weekday() in {4, 5} or timestamp != next_ring:
+        unsafe = bool(result.get("stale")) or result.get("fallback_status") in {"unavailable", "no-safe-route", "wake-time-bound", "stale"}
+        action = "leave" if unsafe or no_lessons_policy == "leave" else "clear"
+        result.update(shortcut_action=action, enabled=False, wake_time=None, wake_at=None, subject=None,
+                      fallback_status="future-alarm-deferred")
+    return result
 
 
 def public_alarm_settings(settings: Mapping[str, Any]) -> dict[str, Any]:

@@ -9,7 +9,6 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 
-DEFAULT_WAKE_TIME = time(7, 15)
 DEFAULT_BUFFER_MINUTES = 75
 
 
@@ -26,91 +25,122 @@ class AlexaApiError(RuntimeError):
     """A safe-to-report Alexa API failure."""
 
 
-def _valid_lesson(item: Any) -> bool:
-    return (
-        isinstance(item, dict)
-        and isinstance(item.get("date"), str)
-        and isinstance(item.get("start"), str)
-        and len(item["start"]) == 5
-        and item["start"][2] == ":"
-    )
+class AlexaScheduleError(ValueError):
+    """The published schedule cannot safely authorize a reminder change."""
 
 
-def _lesson_time(item: dict[str, Any]) -> time:
-    hour, minute = (int(value) for value in item["start"].split(":"))
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ValueError("lesson time is out of range")
-    return time(hour, minute)
+PROFILE_ID = "d1yQtOSfobdzGs0XfzJlNw"
+EFFECTIVE_WAKE_URL = f"https://shahaf-profile-admin.trading-api-9de14d.workers.dev/public/profiles/{PROFILE_ID}/wake.json"
 
 
-def _next_weekday(start: date) -> date:
-    candidate = start
-    while candidate.weekday() >= 5:
-        candidate += timedelta(days=1)
-    return candidate
+def _instant(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("missing timestamp")
+    instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if instant.tzinfo is None:
+        raise ValueError("timestamp must include timezone")
+    return instant
 
 
-def _default_plan(now: datetime, zone: ZoneInfo) -> WakePlan:
-    local_now = now.astimezone(zone)
-    target_date = _next_weekday(local_now.date())
-    if target_date == local_now.date() and local_now.time() >= DEFAULT_WAKE_TIME:
-        target_date = _next_weekday(target_date + timedelta(days=1))
-    return WakePlan(
-        date=target_date,
-        wake_time=datetime.combine(target_date, DEFAULT_WAKE_TIME, tzinfo=zone),
-        first_start=None,
-        first_subject=None,
-        used_default=True,
-    )
+def select_effective_wake(data: dict, now: datetime, *, profile_id: str = PROFILE_ID,
+                          expected_generated_at: str | None = None) -> tuple[datetime | None, dict]:
+    """Validate an effective Worker envelope before authorizing any Alexa change."""
+    if now.tzinfo is None or not isinstance(data, dict):
+        raise ValueError("invalid wake envelope or current time")
+    zone = ZoneInfo("Asia/Jerusalem")
+    today = now.astimezone(zone).date()
+    generated = _instant(data.get("generated_at"))
+    age = now - generated
+    if age > timedelta(hours=3) or age < -timedelta(minutes=5):
+        raise ValueError("wake feed generation is outside the freshness window")
+    if expected_generated_at is not None and generated != _instant(expected_generated_at):
+        raise ValueError("Worker generation does not match the deployed artifact")
+
+    def validate(envelope: dict) -> None:
+        if not isinstance(envelope, dict) or envelope.get("profile_id") != profile_id:
+            raise ValueError("wake profile identity mismatch")
+        if _instant(envelope.get("generated_at")) != generated:
+            raise ValueError("wake preview generation mismatch")
+        if envelope.get("stale") is not False:
+            raise ValueError("wake feed is stale or unconfirmed")
+        target = envelope.get("next_school_day")
+        if not isinstance(target, str):
+            raise ValueError("wake target date is missing")
+        target_date = datetime.strptime(target, "%Y-%m-%d").date()
+        if target_date.isoformat() != target or target_date < today:
+            raise ValueError("wake target date is invalid or elapsed")
+        if envelope.get("shortcut_action") not in ("set", "clear", "leave"):
+            raise ValueError("wake action is malformed")
+        if envelope.get("wake_at") is not None:
+            instant = _instant(envelope["wake_at"]).astimezone(zone)
+            if instant.date() != target_date:
+                raise ValueError("wake instant target date mismatch")
+            if envelope.get("wake_time") != instant.strftime("%H:%M"):
+                raise ValueError("wake time and instant disagree")
+
+    validate(data)
+    deferred = data.get("fallback_status") in {"future-alarm-deferred", "elapsed-wake", "current-weekend"}
+    if data.get("shortcut_action") == "leave" and not deferred:
+        raise ValueError("wake action preserves existing reminders")
+    root_unsafe = {"stale", "unavailable", "no-safe-route", "wake-time-bound",
+                   "unsafe-override-blocked", "restore-reconcile", "invalid-clock-time"}
+    if data.get("fallback_status") in root_unsafe:
+        raise ValueError("wake action is unsafe")
+    root_set = data.get("shortcut_action") == "set"
+    root_at = _instant(data.get("wake_at")) if root_set else None
+    use_preview = deferred or (root_at is not None and root_at <= now)
+    if data.get("next_alarm") is not None and not (
+        root_at is not None and root_at > now and data["next_school_day"] == today.isoformat()
+    ):
+        use_preview = True
+    if use_preview:
+        candidate = data.get("next_alarm")
+        validate(candidate)
+        if candidate["next_school_day"] <= today.isoformat():
+            raise ValueError("wake preview must target a future date")
+    else:
+        candidate = data
+    validate(candidate)
+    unsafe = {"stale", "unavailable", "no-safe-route", "wake-time-bound",
+              "unsafe-override-blocked", "restore-reconcile", "invalid-clock-time",
+              "future-alarm-deferred", "elapsed-wake"}
+    if candidate.get("fallback_status") in unsafe:
+        raise ValueError("wake action is unsafe")
+    action = candidate.get("shortcut_action")
+    if action == "leave":
+        raise ValueError("wake action preserves existing reminders")
+    if action == "clear":
+        if (candidate.get("enabled") is not False or candidate.get("wake_at") is not None
+                or candidate.get("wake_time") is not None):
+            raise ValueError("clear envelope is inconsistent")
+        return None, candidate
+    if action != "set" or candidate.get("enabled") is not True:
+        raise ValueError("wake action is not confirmed")
+    wake_at = _instant(candidate.get("wake_at")).astimezone(zone)
+    if wake_at.date().isoformat() != candidate["next_school_day"] or wake_at <= now:
+        raise ValueError("wake instant does not match a future target")
+    if candidate.get("wake_time") != wake_at.strftime("%H:%M"):
+        raise ValueError("wake time and instant disagree")
+    return wake_at, candidate
 
 
-def build_wake_plan(data: dict[str, Any], now: datetime, *, timezone_name: str = "Asia/Jerusalem", buffer_minutes: int = DEFAULT_BUFFER_MINUTES) -> WakePlan | None:
-    """Build the next wake-up plan from published schedule JSON.
+def build_wake_plan(data: dict[str, Any], now: datetime, *, timezone_name: str = "Asia/Jerusalem",
+                    buffer_minutes: int = DEFAULT_BUFFER_MINUTES,
+                    profile_id: str = PROFILE_ID, expected_generated_at: str | None = None) -> WakePlan | None:
+    """Use the effective published alarm; never recompute personalized wake times.
 
-    Invalid or stale schedule data deliberately falls back to the configured
-    default weekday wake-up rather than trusting unverified lesson times.
+    Legacy timezone/buffer keywords are retained for call compatibility; the
+    profile feed supplies the actual Israel alarm instant.
     """
-    zone = ZoneInfo(timezone_name)
-    if now.tzinfo is None:
-        raise ValueError("now must be timezone-aware")
-    if not isinstance(data, dict) or data.get("stale") or data.get("schedule_available") is False:
-        return _default_plan(now, zone)
-
-    raw_schedule = data.get("schedule")
-    if not isinstance(raw_schedule, list):
-        return _default_plan(now, zone)
-
-    local_now = now.astimezone(zone)
-    candidates: list[tuple[date, time, dict[str, Any]]] = []
-    invalid_item = False
     try:
-        for item in raw_schedule:
-            if not _valid_lesson(item):
-                invalid_item = True
-                continue
-            lesson_date = date.fromisoformat(item["date"])
-            lesson_time = _lesson_time(item)
-            if lesson_date < local_now.date():
-                continue
-            if lesson_date == local_now.date() and lesson_time <= local_now.time():
-                continue
-            candidates.append((lesson_date, lesson_time, item))
-    except (TypeError, ValueError):
-        return _default_plan(now, zone)
-
-    if invalid_item:
-        return _default_plan(now, zone)
-    if not candidates:
+        wake_at, envelope = select_effective_wake(
+            data, now, profile_id=profile_id, expected_generated_at=expected_generated_at)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise AlexaScheduleError(str(exc)) from exc
+    if wake_at is None:
         return None
-
-    lesson_date, lesson_time, item = min(candidates, key=lambda value: (value[0], value[1]))
-    wake_time = datetime.combine(lesson_date, lesson_time, tzinfo=zone) - timedelta(minutes=buffer_minutes)
-    return WakePlan(
-        date=lesson_date,
-        wake_time=wake_time,
-        first_start=lesson_time,
-        first_subject=str(item.get("subject") or "your first lesson"),
-    )
+    return WakePlan(date=wake_at.date(), wake_time=wake_at, first_start=None,
+                    first_subject=envelope.get("subject") if isinstance(envelope.get("subject"), str) else None)
 
 
 def reminder_id(plan: WakePlan) -> str:
@@ -121,10 +151,10 @@ def build_reminder_payload(plan: WakePlan, *, timezone_name: str = "Asia/Jerusal
     request_at = request_time or datetime.now(timezone.utc)
     if request_at.tzinfo is None:
         raise ValueError("request_time must be timezone-aware")
-    if plan.first_subject:
+    if plan.first_subject and plan.first_start:
         lesson_text = f"School schedule wake-up. Your first lesson is {plan.first_subject} at {plan.first_start.strftime('%H:%M')}"
     else:
-        lesson_text = "School schedule wake-up. Your schedule could not be confirmed, so this is the default wake-up time."
+        lesson_text = f"School schedule wake-up. Your alarm is at {plan.wake_time.strftime('%H:%M')}."
     return {
         "requestTime": request_at.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "trigger": {

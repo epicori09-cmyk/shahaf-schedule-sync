@@ -36,6 +36,30 @@ END:VCALENDAR\r
 
 
 class PhotoScheduleTests(unittest.TestCase):
+    def test_partial_old_weekday_does_not_broaden_manual_exclusion(self) -> None:
+        calendar = rebuild_calendar(parse_calendar(OLD_ICS))
+        excluded = [event.period for event in calendar.events if event.is_recurring
+                    and event.start.weekday() == 6 and event.exdates()]
+        self.assertEqual(excluded, [1])
+
+    def test_reordered_teacher_preserves_automatic_cancellation(self) -> None:
+        text = OLD_ICS.replace("מורה: old", "מורה: חן לימור").replace(
+            "EXDATE;TZID=Asia/Jerusalem:20260913T083000",
+            "EXDATE;TZID=Asia/Jerusalem:20260913T083000\r\nX-SHAHAF-AUTO-EXDATE;TZID=Asia/Jerusalem:20260913T083000")
+        calendar = rebuild_calendar(parse_calendar(text))
+        event = next(item for item in calendar.events if item.is_recurring
+                     and item.start.weekday() == 6 and item.period == 1)
+        self.assertEqual({item.date() for item in event.auto_exdates()}, {date(2026, 9, 13)})
+
+    def test_duplicate_recurring_slot_fails_before_mutating_input(self) -> None:
+        calendar = parse_calendar(OLD_ICS)
+        calendar.events.append(parse_calendar(OLD_ICS.replace(
+            "old-sunday-period-1@example", "duplicate@example")).events[0])
+        original_lines = [list(event.lines) for event in calendar.events]
+        with self.assertRaisesRegex(ValueError, "Duplicate recurring"):
+            rebuild_calendar(calendar)
+        self.assertEqual([event.lines for event in calendar.events], original_lines)
+
     def test_photo_timetable_contains_the_two_sport_corrections(self) -> None:
         self.assertEqual(len(PHOTO_WEEKLY_SCHEDULE), 48)
         self.assertIn((6, 2, "חינוך גופני", "יונתן דנישבסקי", ""), PHOTO_WEEKLY_SCHEDULE)

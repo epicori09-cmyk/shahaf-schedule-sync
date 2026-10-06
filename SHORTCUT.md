@@ -3,7 +3,23 @@
 This uses the normal iPhone Clock alarm. It does not require Spotify,
 jailbreak access, Apple Developer membership, or a paid service.
 
-## Current installed student shortcut log
+## Latest installed Shortcut report — 2026-10-06
+
+The user reports an initial `AlarmAction is false` stop, followed by deletion
+of exact-label `SHAHAF` alarms, a `clear` stop, then `wake_at` → Create Alarm.
+There is **no `alarm_for_today` condition**. Daily runs are 05:00 and 06:40.
+
+This initial condition is unsafe: the endpoint returns text `leave`, not
+Boolean `false`. Change it to **AlarmAction is leave → Stop This Shortcut**
+before Find/Delete. A stronger guard permits deletion only when the action
+is exactly `set` or `clear`; missing/unknown actions stop. Validate a `set`
+timestamp before deleting the existing alarm. No phone repair is confirmed.
+
+The 06:40 run cannot apply new cancellations before a 06:30 alarm. Add an
+earlier refresh if that window is unacceptable. Server sync cannot run a
+Shortcut on the phone.
+
+## Historical installed student shortcut log — 2026-09-05
 
 Recorded 2026-09-05 from the currently working shortcut. This is an observed
 flow, not a generated or inferred shortcut:
@@ -34,13 +50,12 @@ public schedule endpoint.
 
 The student endpoint returns a JSON object with `shortcut_action`,
 `alarm_for_today` (a Boolean), and `wake_at` (an ISO-8601 timestamp). The
-currently installed Shortcut also checks `alarm_for_today` as text and stops
-when it is `No`. This is intentional: on Saturday, a Sunday `wake_at` would
-become a time-only Clock alarm whose next occurrence could be Saturday rather
-than Sunday. The daily automation will run again on Sunday, when the endpoint
-returns `alarm_for_today: true`, and then create the alarm. Do not remove this
-guard unless the Shortcut is redesigned to create a genuinely date-specific
-alarm and separately proves Friday/Saturday safety.
+historical Shortcut checked `alarm_for_today`; the latest user report does
+not. The root feed now checks the actual next time-only Clock occurrence.
+Future planning remains in `next_alarm` for the website; Shortcuts must read
+the root fields, never that preview. A future calendar date alone cannot make
+an iPhone Clock alarm date-specific. Do not combine the historical daily-only
+guard with the current root contract without reviewing the delete/create flow.
 
 The schedule and transit wake planners explicitly ignore Friday and Saturday
 dates (the Israeli weekend). Sunday remains a valid school day. When a valid
@@ -63,7 +78,9 @@ the label `Shahaf`; the Shortcut deletes only alarms with that exact label.
 ## Create the Shortcut
 
 In the Shortcuts app, create a shortcut named **Refresh School Wake Alarm**.
-Add these actions in order:
+New setups use the endpoint's default label `Shahaf`. When updating the reported
+existing Shortcut, keep its `SHAHAF` label in both Find and Create instead;
+do not leave a second spelling's old alarms behind. Add these actions in order:
 
 1. **Get Contents of URL**
    - URL: `https://shahaf-profile-admin.trading-api-9de14d.workers.dev/public/profiles/d1yQtOSfobdzGs0XfzJlNw/wake.json`
@@ -71,34 +88,32 @@ Add these actions in order:
 2. **Get Dictionary from Input**.
 3. **Get Dictionary Value** for `shortcut_action` (using the Dictionary output
    from step 2).
-4. Add **If**. Its left value is the result of step 3; set the condition to
-   `is` and type `leave`. Inside the block, add **Stop Shortcut** (shown as
-   **Stop This Shortcut** on some iOS versions).
-5. **Find Alarm** (shown as **Find Alarms** on some iOS versions). Add a
-   filter so **Label is exactly** `Shahaf`.
-6. Add **If** with the Find result and condition `has any value`. Inside it,
+4. Set that text as `AlarmAction`. If it is neither exactly `set` nor
+   exactly `clear`, **Stop This Shortcut**. This includes `leave`, missing
+   values and unknown actions; never treat `false` as the preservation action.
+5. If `AlarmAction` is `set`, get `wake_at` from the original dictionary,
+   use **Get Dates from Input**, and set the result as `WakeDate`. Require
+   exactly one date, later than **Current Date**; otherwise stop. Do this
+   validation **before deleting any alarm**.
+6. **Find Alarm** (shown as **Find Alarms** on some iOS versions). Add a
+   filter so **Label is exactly** your managed label (`Shahaf` for new setups,
+   `SHAHAF` in the reported existing Shortcut).
+7. Add **If** with the Find result and condition `has any value`. Inside it,
    add **Delete Alarms** using the Find result.
-7. Get the dictionary value for `shortcut_action` again, using the Dictionary
-   output from step 2.
-8. Add **If**. Set it to `shortcut_action is clear`; inside it add
+8. Add **If**. Set it to `AlarmAction is clear`; inside it add
    **Stop Shortcut**.
-9. Get `alarm_for_today` from the Dictionary output → **Get Text from Input**.
-10. Add **If**. If that text is `No`, add **Stop Shortcut**.
-11. Get the dictionary value for `wake_at`, using the Dictionary output from
-   step 2.
-12. Use **Get Dates from Input** to turn `wake_at` into a Date.
-13. **Add Alarm** (shown as **Create Alarm** on some iOS versions) using that
-    Date/time. Set its label to exactly `Shahaf`; leave Repeat off.
+9. **Add Alarm** (shown as **Create Alarm** on some iOS versions) using the
+    `WakeDate` date/time. Use the same exact label in Find and Create; the reported
+    current label is `SHAHAF`. Leave Repeat off.
 
 `shortcut_action` is deliberately plain text so the Shortcut avoids fragile
 Boolean pickers:
 
 - `leave`: Shahaf data is stale or unavailable. Stop before touching alarms.
-- `clear`: no school today, or the wake time has already passed. Delete only
+- `clear`: confirmed no-school/manual cancellation or an unsafe future Clock occurrence. Delete only
   the labeled school alarm, then stop.
-- `set`: a valid school-day wake alarm is available. The `alarm_for_today`
-  guard creates it only when the target is today, preventing a future
-  Sunday time from becoming a Friday or Saturday Clock occurrence.
+- `set`: a valid school-day wake alarm whose next Clock occurrence matches
+  the planned date/time is available. An elapsed root returns `leave`.
 
 The schedule workflow uses NVIDIA NIM as an additional conservative gate for
 destructive cases. If NIM is unavailable or sees a possible exam/other
@@ -113,7 +128,8 @@ Create two Personal Automations that both run the existing shortcut:
 2. Set `05:00`, repeat **Daily**, choose **Run Immediately** (or turn off Ask
    Before Running), and select **Run Existing Shortcut** → **Refresh School
    Wake Alarm**.
-3. Create a second identical automation at `06:45`.
+3. The reported second automation runs at `06:40`; this is too late for
+   cancellations of 06:30 alarms discovered after the 05:00 run.
 
 Make sure the iPhone's time zone is set to Israel. Apple's Shortcuts supports
 daily Time of Day automations, and Clock alarms can be labeled and repeated
@@ -130,6 +146,7 @@ alarm label.
 
 Run the Shortcut manually once while the backup alarm remains enabled. On a
 school day it should leave the backup alone and create one separately labeled
-`Shahaf` alarm at the returned `wake_time`. Run it again; there
+   alarm with your exact managed label (`Shahaf` for new setups; reported
+`SHAHAF` for the existing Shortcut) at the returned `wake_time`. Run it again; there
 should still be only one alarm with that label. Do not remove the 07:15 backup
 until several school mornings have succeeded.

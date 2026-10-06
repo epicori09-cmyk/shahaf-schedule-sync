@@ -76,7 +76,7 @@ def load_config(path: Path) -> Config:
 
 
 def fetch_text(url: str) -> str:
-    request = Request(url, headers={"User-Agent": "ostrovsky-shahaf-sync/0.1"})
+    request = Request(url, headers={"User-Agent": "ostrovsky-shahaf-sync/0.1", "Cache-Control": "no-cache", "Pragma": "no-cache"})
     for attempt in range(3):
         try:
             with urlopen(request, timeout=20) as response:
@@ -91,6 +91,18 @@ def fetch_text(url: str) -> str:
     raise SyncFailure("Source retrieval exhausted")
 
 
+def _complete_source_document(html: str) -> str:
+    """Reject transport-truncated pages before absence can remove state.
+
+    This verifies the document envelope, not the upstream list's truthfulness.
+    """
+    if not re.search(r"<html\b", html, re.IGNORECASE) or not re.search(
+        r"</body\s*>\s*</html\s*>\s*$", html, re.IGNORECASE
+    ):
+        raise SyncFailure("Shahaf source document is incomplete")
+    return html
+
+
 def fetch_source(
     config: Config,
     today: date,
@@ -99,7 +111,7 @@ def fetch_source(
     selected_class_id = class_id or config.class_id
     url = f"{config.source_base_url}?cls={selected_class_id}&tab=changes"
     try:
-        html = fetch_text(url)
+        html = _complete_source_document(fetch_text(url))
         return parse_changes_html(html, today, url, expected_class_id=selected_class_id), [url]
     except (ShahafSourceError, SyncFailure) as exc:
         raise SyncFailure(f"Shahaf changes feed is not trustworthy: {exc}") from exc
@@ -115,7 +127,7 @@ def fetch_exams(
     selected_class_id = class_id or config.class_id
     url = f"{config.source_base_url}?cls={selected_class_id}&tab=exams"
     try:
-        html = fetch_text(url)
+        html = _complete_source_document(fetch_text(url))
         return parse_exams_html(
             html,
             today,
@@ -136,7 +148,7 @@ def fetch_events(
     selected_class_id = class_id or config.class_id
     url = f"{config.source_base_url}?cls={selected_class_id}&tab=events"
     try:
-        html = fetch_text(url)
+        html = _complete_source_document(fetch_text(url))
         return parse_events_html(html, today, url, expected_class_id=selected_class_id)
     except (ShahafSourceError, SyncFailure) as exc:
         raise SyncFailure(f"Shahaf events feed is not trustworthy: {exc}") from exc
@@ -423,7 +435,7 @@ def _build_public_profile(
         for week in range(4):
             suffix = f"&week={week}" if week else ""
             url = f"{config.source_base_url}?cls={class_id}&tab=changestable{suffix}"
-            snapshot = parse_timetable_html(fetch_text(url), current.date(), url)
+            snapshot = parse_timetable_html(_complete_source_document(fetch_text(url)), current.date(), url, require_complete_grid=True, expected_class_id=class_id)
             update_text = snapshot.update_text or update_text
             lessons.extend(
                 item
@@ -880,16 +892,23 @@ def execute(
                 alarm_overrides=profile_spec.get("alarm_overrides") if managed and isinstance(profile_spec.get("alarm_overrides"), list) else None,
                 wake_time_by_first_lesson_start=profile_wake_rules,
             )
-        # Do not publish an external calendar while profile rendering can still
-        # fail. Keep the known-good site and Gist together on staging failure.
-        if updated_content != gist_file.content and not dry_run:
-            client.update_file(config.gist_id, config.gist_filename, updated_content)
+        # Complete local installation before the irreversible remote write.
+        # A failed local rename must never leave a new Gist with old Pages data.
         site_path.mkdir(parents=True, exist_ok=True)
         backup = Path(staging.name) / "previous-students"
         if managed_site_path.exists():
             managed_site_path.rename(backup)
         try:
             staged_students.rename(managed_site_path)
+            if updated_content != gist_file.content and not dry_run:
+                client.update_file(config.gist_id, config.gist_filename, updated_content)
+        except GitHubError:
+            # Move our newly installed tree back into the temporary staging
+            # directory before restoring the previous known-good tree.
+            managed_site_path.rename(staged_students)
+            if backup.exists():
+                backup.rename(managed_site_path)
+            raise
         except OSError:
             if backup.exists():
                 backup.rename(managed_site_path)

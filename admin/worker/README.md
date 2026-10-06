@@ -35,7 +35,7 @@ The existing `GIST_TOKEN`, `NVIDIA_API_KEY`, and Alexa secrets are unchanged.
 
 ## Alarm control center
 
-The dashboard includes a managed-profile-only alarm control center. It stores
+The Worker API implements managed-profile-only alarm controls. It stores
 global defaults and per-profile overrides in D1, then includes the effective
 settings in the existing private profile bundle consumed by the Pages
 workflow. The next run of that profile's iPhone Shortcut applies the result;
@@ -60,14 +60,15 @@ triggers the normal Pages sync in the background. The fast Worker Shortcut
 feed can read the matching override immediately, so the student's Shortcut can
 apply the iPhone change without waiting for Pages; the Pages `wake.json` is
 reconciled afterward. Each change stores a small private snapshot of the
-original alarm baseline. **Restore correct time** uses the first safe
-pre-change wake time to put the same profile's next alarm back at its correct
-original hour, regardless of later cancellation or move actions, then asks
-Pages to reconcile it. Older overrides created before restore snapshots
-existed use the normal queued reconciliation path. Friday and Saturday target
+original alarm baseline for audit. **Restore correct time** uses the current
+fresh, unmodified schedule baseline for the same target date, not an obsolete
+saved wake time. An uncertain baseline cannot authorize a destructive restore.
+Public commands include the displayed target date and command version; stale
+commands or commands overlapping an active pause window return `409` without
+changing the window. Friday and Saturday target
 dates remain protected by the normal no-weekend alarm logic.
 
-The dashboard supports preview, bulk pause/resume/reset/set/clear/leave
+The API supports preview, bulk pause/resume/reset/set/clear/leave
 commands, per-profile settings, expiring date overrides, audit history, and
 settings rollback. A force command requires an explicit reason and
 confirmation. Backup alarms are never managed. Transit-enabled managed
@@ -75,11 +76,32 @@ profiles can set a safe route preference; the planner still requires arrival
 at least five minutes before the first lesson and falls back to automatic
 routing if the preference disappears.
 
-Apply the additive schema before deploying the Worker:
+The separate `alarmDashboardEnhancements` UI is currently not injected into
+the served dashboard. These API features must not be described as visible
+dashboard controls until that interface is deliberately enabled and tested.
+
+Settings writes require the current settings version; one-day commands also
+require the selected date's command version from the dashboard. Refresh after
+a `409` conflict instead of replaying
+an old payload. Bulk actions report a result for every requested profile;
+`207` means partial/conflicting results, not an all-or-nothing transaction.
+Check those results before assuming everyone was changed. Committed changes
+with audit/publish warnings must be distinguished from rejected commands.
+
+For a **fresh database**, current `schema.sql` already includes the alarm
+columns; do not reapply migrations 0002–0004 afterward. For an **older database**,
+inspect its schema before deployment and apply only missing additive migrations:
+
+`wrangler d1 execute shahaf-profiles --remote --command "PRAGMA table_info(alarm_overrides);"`
 
 `wrangler d1 execute shahaf-profiles --remote --file migrations/0002_alarm_controls.sql`
 
 `wrangler d1 execute shahaf-profiles --remote --file migrations/0003_alarm_restore.sql`
+
+`wrangler d1 execute shahaf-profiles --remote --file migrations/0004_alarm_override_windows.sql`
+
+Recheck that `restore_json` and `target_date_end` exist before `wrangler deploy`.
+Do not rerun an already-applied `ALTER TABLE` migration.
 
 The Pages workflow marks one-time commands as published only after a
 successful Pages deployment. It does not consume them: they remain in the

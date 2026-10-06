@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -42,6 +42,16 @@ def snapshot_tree(root: Path) -> list[tuple[str, str, bytes | None]]:
 
 
 class RetrievalSafetyTests(unittest.TestCase):
+    def test_truncated_live_lists_fail_before_parsing(self) -> None:
+        from test_shahaf import CHANGES_HTML, EVENTS_HTML
+        from test_exams import EXAMS_HTML
+        config = cli.Config("Asia/Jerusalem", "https://example.invalid/", "11", "gist", "school.ics", 21, "Schedule", "site", class_number=2)
+        for fetcher, html in ((cli.fetch_source, CHANGES_HTML), (cli.fetch_events, EVENTS_HTML), (cli.fetch_exams, EXAMS_HTML)):
+            with self.subTest(fetcher=fetcher.__name__), patch.object(cli, "fetch_text", return_value=html.split('</body>')[0]):
+                with self.assertRaisesRegex(cli.SyncFailure, "document is incomplete"):
+                    fetcher(config, date(2026, 10, 6))
+        self.assertEqual(cli._complete_source_document(EVENTS_HTML), EVENTS_HTML)
+
     def test_missing_or_malformed_bundle_is_not_an_empty_authoritative_list(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.json"
@@ -86,6 +96,9 @@ class RetrievalSafetyTests(unittest.TestCase):
 
         self.assertEqual(open_mock.call_count, 2)
         sleep_mock.assert_called_once_with(1)
+        request = open_mock.call_args.args[0]
+        self.assertEqual(request.get_header("Cache-control"), "no-cache")
+        self.assertEqual(request.get_header("Pragma"), "no-cache")
 
     def test_invalid_managed_bundle_preserves_existing_tree_without_gist_access(self) -> None:
         config = cli.Config(

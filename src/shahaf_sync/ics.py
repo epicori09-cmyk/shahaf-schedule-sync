@@ -241,6 +241,12 @@ class IcsEvent:
             dates.update(parse_datetime(item) for item in value.split(",") if item)
         return dates
 
+    def manual_exdates(self) -> set[datetime]:
+        dates: set[datetime] = set()
+        for _params, value in self.get_all("X-SHAHAF-MANUAL-EXDATE"):
+            dates.update(parse_datetime(item) for item in value.split(",") if item)
+        return dates
+
     def add_exdate(self, occurrence: datetime, automatic: bool = True) -> None:
         all_dates = self.exdates()
         all_dates.add(occurrence)
@@ -255,6 +261,14 @@ class IcsEvent:
             self._set(
                 "X-SHAHAF-AUTO-EXDATE",
                 ",".join(format_datetime(item) for item in sorted(auto_dates)),
+                {"TZID": "Asia/Jerusalem"},
+            )
+        else:
+            manual_dates = self.manual_exdates()
+            manual_dates.add(occurrence)
+            self._set(
+                "X-SHAHAF-MANUAL-EXDATE",
+                ",".join(format_datetime(item) for item in sorted(manual_dates)),
                 {"TZID": "Asia/Jerusalem"},
             )
 
@@ -274,7 +288,9 @@ class IcsEvent:
         # A school-event exclusion can coexist with a normal published
         # cancellation for the same occurrence. Keep the exclusion until both
         # owners have removed it.
-        remaining = self.exdates() if occurrence in self.event_exdates() else self.exdates() - {occurrence}
+        remaining = self.exdates()
+        if occurrence not in self.event_exdates() and occurrence not in self.manual_exdates():
+            remaining.discard(occurrence)
         if remaining:
             self._set(
                 "EXDATE",
@@ -288,8 +304,22 @@ class IcsEvent:
         event_dates = self.event_exdates()
         if occurrence in event_dates:
             return
-        all_dates = self.exdates()
-        all_dates.add(occurrence)
+        # Capture unowned legacy EXDATEs before adding this event's date. This
+        # includes a raw manual EXDATE at the exact same occurrence. Once an
+        # old event marker is already persisted, however, the original owner
+        # of a same-date raw EXDATE is historical information this format does
+        # not retain and cannot be reconstructed safely.
+        existing_dates = self.exdates()
+        manual_dates = self.manual_exdates()
+        unowned_dates = existing_dates - self.auto_exdates() - event_dates - manual_dates
+        if unowned_dates:
+            manual_dates.update(unowned_dates)
+            self._set(
+                "X-SHAHAF-MANUAL-EXDATE",
+                ",".join(format_datetime(item) for item in sorted(manual_dates)),
+                {"TZID": "Asia/Jerusalem"},
+            )
+        all_dates = existing_dates | {occurrence}
         self._set(
             "EXDATE",
             ",".join(format_datetime(item) for item in sorted(all_dates)),
@@ -315,7 +345,9 @@ class IcsEvent:
             )
         else:
             self._remove("X-SHAHAF-EVENT-EXDATE")
-        remaining = self.exdates() if occurrence in self.auto_exdates() else self.exdates() - {occurrence}
+        remaining = self.exdates()
+        if occurrence not in self.auto_exdates() and occurrence not in self.manual_exdates():
+            remaining.discard(occurrence)
         if remaining:
             self._set(
                 "EXDATE",
@@ -358,7 +390,14 @@ class IcsEvent:
             line
             for line in self.lines
             if _parse_property(line)[0]
-            not in {"RRULE", "EXDATE", "X-SHAHAF-AUTO-EXDATE", "X-SHAHAF-EVENT-EXDATE", "RECURRENCE-ID"}
+            not in {
+                "RRULE",
+                "EXDATE",
+                "X-SHAHAF-AUTO-EXDATE",
+                "X-SHAHAF-EVENT-EXDATE",
+                "X-SHAHAF-MANUAL-EXDATE",
+                "RECURRENCE-ID",
+            }
         ]
         override = IcsEvent(lines)
         override._set("DTSTART", format_datetime(new_start), {"TZID": "Asia/Jerusalem"})

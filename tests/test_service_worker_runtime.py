@@ -217,9 +217,32 @@ async function refreshDataSafety() {
   }
 }
 
+async function alarmFeedsBypassCache() {
+  const runtime = makeRuntime(null, new FakeResponse('{}'));
+  const urls = [
+    'https://alarm.example/public/profiles/student-profile/wake.json',
+    'https://example.test/students/known-profile/wake.json',
+    'https://example.test/students/another-profile/data.json',
+    'https://example.test/api/alarm-command',
+  ];
+  for (const url of urls) {
+    // Seed a stale response: bypass must hold even when CacheStorage already
+    // contains the URL from a previous faulty service worker.
+    runtime.cache.entries.set(url, new FakeResponse('{"shortcut_action":"set"}'));
+    for (const action of ['set', 'clear']) {
+      let intercepted = false;
+      const event = { request: new FakeRequest(url), respondWith() { intercepted = true; }, waitUntil() {} };
+      for (const listener of runtime.listeners.get('fetch') || []) listener(event);
+      expectEqual(intercepted, false, `${url}: ${action} read must reach network, not the stored set`);
+    }
+  }
+  expectEqual(runtime.cache.putCalls.length, 0, 'no alarm feed is written into the cache');
+}
+
 const scenarios = {
   install_contract: installContract,
   refresh_data_safety: refreshDataSafety,
+  alarm_feeds_bypass_cache: alarmFeedsBypassCache,
 };
 
 (async () => {
@@ -284,6 +307,9 @@ class ServiceWorkerRuntimeTests(unittest.TestCase):
 
     def test_data_refresh_rejects_html_wrong_profile_and_older_runtime(self) -> None:
         self.run_runtime("refresh_data_safety")
+
+    def test_alarm_feeds_never_use_even_preexisting_cache(self) -> None:
+        self.run_runtime("alarm_feeds_bypass_cache")
 
 
 if __name__ == "__main__":

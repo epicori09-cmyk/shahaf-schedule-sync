@@ -7,9 +7,81 @@ const workerPath = path.resolve(__dirname, "../admin/worker/src/index.js");
 const workerSource = fs.readFileSync(workerPath, "utf8");
 
 async function loadWorker() {
-  const source = `${workerSource}\nexport { israelOffset, validateAlarmCommand, applyPublicAlarmOverride, createAlarmRestoreSnapshot, fetchPublicWake, getPendingAlarmOverrides, persistAlarmOverride };`;
+  const source = `${workerSource}\nexport { israelOffset, validateAlarmCommand, applyPublicAlarmOverride, createAlarmRestoreSnapshot, alarmRestoreSnapshot, fetchPublicWake, getPendingAlarmOverrides, persistAlarmOverride, publicAlarmCommandVersion, nextPublicAlarmDate, effectivePublicWake, finalizeSettingsMutation, settingsVersion };`;
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}#${Date.now()}-${Math.random()}`);
 }
+
+test("time-only Clock root cannot ring a future plan on this morning or across a long gap", async () => {
+  const { applyPublicAlarmOverride } = await loadWorker();
+  const future = { profile_id: "student_123", next_school_day: "2026-10-07", wake_at: "2026-10-07T06:45:00+03:00", wake_time: "06:45", shortcut_action: "set", stale: false };
+  for (const hour of ["05:00", "06:40"]) {
+    const result = applyPublicAlarmOverride(future, [], new Date(`2026-10-06T${hour}:00+03:00`));
+    assert.equal(result.shortcut_action, "clear");
+    assert.equal(result.fallback_status, "future-alarm-deferred");
+  }
+  assert.equal(applyPublicAlarmOverride(future, [], new Date("2026-10-06T14:00:00+03:00")).shortcut_action, "set");
+  assert.equal(applyPublicAlarmOverride({ ...future, next_school_day: "2026-10-11", wake_at: "2026-10-11T06:45:00+03:00" }, [], new Date("2026-10-08T20:00:00+03:00")).shortcut_action, "clear");
+  assert.equal(applyPublicAlarmOverride({ ...future, alarm_control: { settings: { no_lessons_policy: "leave" } } }, [], new Date("2026-10-06T05:00:00+03:00")).shortcut_action, "leave");
+  assert.equal(applyPublicAlarmOverride({ ...future, stale: true }, [], new Date("2026-10-06T05:00:00+03:00")).shortcut_action, "leave");
+  const friday = { ...future, next_school_day: "2026-10-09", wake_at: "2026-10-09T06:45:00+03:00" };
+  assert.equal(applyPublicAlarmOverride(friday, [], new Date("2026-10-08T20:00:00+03:00")).shortcut_action, "clear");
+  assert.equal(applyPublicAlarmOverride({ ...friday, stale: true }, [], new Date("2026-10-08T20:00:00+03:00")).shortcut_action, "leave");
+  for (const fallback_status of ["stale", "unavailable", "no-safe-route", "wake-time-bound", "unsafe-override-blocked"]) {
+    assert.equal(applyPublicAlarmOverride({ ...future, fallback_status }, [], new Date("2026-10-06T05:00:00+03:00")).shortcut_action, "leave", fallback_status);
+    assert.equal(applyPublicAlarmOverride({ ...future, fallback_status }, [], new Date("2026-10-09T05:00:00+03:00")).shortcut_action, "leave", `weekend ${fallback_status}`);
+  }
+});
+
+test("public command versions bind profile, date, and the sorted covering override id set", async () => {
+  const { publicAlarmCommandVersion } = await loadWorker();
+  const rows = [
+    { id: "z", target_date: "2026-10-06", target_date_end: "2026-10-08" },
+    { id: "a", target_date: "2026-10-07" },
+    { id: "unrelated", target_date: "2026-10-09" },
+  ];
+  const version = await publicAlarmCommandVersion("p1", "2026-10-07", rows);
+  assert.equal(version, await publicAlarmCommandVersion("p1", "2026-10-07", rows.slice().reverse()));
+  assert.notEqual(version, await publicAlarmCommandVersion("p2", "2026-10-07", rows));
+  assert.notEqual(version, await publicAlarmCommandVersion("p1", "2026-10-08", rows));
+  assert.notEqual(version, await publicAlarmCommandVersion("p1", "2026-10-07", rows.slice(1)));
+});
+
+test("provided public wake snapshot is reused for target, restore, and effective response", async (t) => {
+  const { nextPublicAlarmDate, alarmRestoreSnapshot, effectivePublicWake } = await loadWorker();
+  const originalFetch = global.fetch;
+  let fetches = 0;
+  global.fetch = async () => { fetches += 1; throw new Error("unexpected fetch"); };
+  t.after(() => { global.fetch = originalFetch; });
+  const targetDate = nextWeekdayDate(1);
+  const baseline = { next_school_day: targetDate, wake_time: "07:15", wake_at: isoAtIsrael(targetDate, "07:15"), shortcut_action: "set", fallback_status: "scheduled" };
+  const wake = {
+    profile_id: "student_123", generated_at: new Date().toISOString(), next_school_day: null, wake_at: null, shortcut_action: "clear",
+    next_alarm: { profile_id: "student_123", generated_at: new Date().toISOString(), ...baseline, alarm_baseline: baseline, alarm_control: {} },
+  };
+  assert.equal(await nextPublicAlarmDate({}, "student_123", wake), targetDate);
+  const restored = JSON.parse(await alarmRestoreSnapshot({}, "student_123", targetDate, { restore_json: JSON.stringify({ ...baseline, wake_time: "06:00" }) }, { wake, requireFreshBaseline: true }));
+  assert.equal(restored.wake_time, "07:15");
+  const env = { DB: { prepare() { return { bind() { return this; }, async all() { return { results: [] }; } }; } } };
+  const effective = await effectivePublicWake(env, { id: "p1", public_id: "student_123" }, { wake });
+  assert.match(effective.next_alarm.alarm_control.command_version, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(fetches, 0);
+});
+
+test("fresh no-lessons restore baseline never resurrects an old set snapshot", async () => {
+  const { alarmRestoreSnapshot, applyPublicAlarmOverride } = await loadWorker();
+  const targetDate = nextWeekdayDate(1);
+  const baseline = { next_school_day: targetDate, wake_time: null, wake_at: null, shortcut_action: "clear", fallback_status: "no-lessons", enabled: false };
+  const wake = { next_alarm: { next_school_day: targetDate, alarm_baseline: baseline } };
+  const old = { next_school_day: targetDate, wake_time: "06:30", wake_at: isoAtIsrael(targetDate, "06:30"), shortcut_action: "set" };
+  const snapshot = JSON.parse(await alarmRestoreSnapshot({}, "student_123", targetDate, { restore_json: JSON.stringify(old) }, { wake, requireFreshBaseline: true }));
+  assert.equal(snapshot.shortcut_action, "clear");
+  assert.equal(snapshot.wake_at, null);
+  const legacyRestoredRow = { id: "legacy-restore", target_date: targetDate, action: "set", wake_at: old.wake_at, restore_json: JSON.stringify(old), reason: "Student restored the correct original alarm time" };
+  const effective = applyPublicAlarmOverride({ next_school_day: targetDate, ...old, alarm_baseline: baseline, alarm_control: { override_active: true } }, legacyRestoredRow);
+  assert.equal(effective.shortcut_action, "clear");
+  assert.equal(effective.wake_at, null);
+  assert.equal(effective.alarm_control.override_active, false);
+});
 
 function isoAtIsrael(targetDate, clock) {
   const noon = new Date(`${targetDate}T12:00:00Z`);
@@ -226,9 +298,122 @@ test("override persistence uses optimistic id CAS and preserves the first restor
     restoreJson: JSON.stringify({ wake_time: "07:00" }), expectedOverrideId: "old-id",
   });
   assert.equal(saved, false);
-  assert.match(sql, /WHERE\s+alarm_overrides\.id=\?12/i);
+  assert.match(sql, /alarm_overrides\.id=\?12/i);
   assert.match(sql, /COALESCE\(alarm_overrides\.restore_json,\s*excluded\.restore_json\)/i);
-  assert.equal(values.at(-1), "old-id");
+  assert.equal(values[11], "old-id");
+});
+
+function publicCommandEnv(overrides = []) {
+  let pendingReads = 0;
+  let persisted = null;
+  const state = { mutations: 0 };
+  const env = {
+    PUBLIC_SITE_ORIGIN: "https://school.example",
+    __state: state,
+    DB: {
+      prepare(query) {
+        let values = [];
+        return {
+          bind(...args) { values = args; return this; },
+          async first() {
+            if (/INSERT INTO rate_limits/.test(query)) return { attempts: 1 };
+            if (/SELECT id, public_id FROM profiles/.test(query)) return { id: "p1", public_id: "student_123" };
+            if (/target_date=\?2/.test(query)) return overrides.find((item) => item.target_date === values[1]) || null;
+            throw new Error(`unexpected first SQL: ${query}`);
+          },
+          async all() {
+            if (/FROM alarm_overrides/.test(query)) {
+              pendingReads += 1;
+              return { results: pendingReads > 1 && persisted ? [...overrides, persisted] : overrides };
+            }
+            throw new Error(`unexpected all SQL: ${query}`);
+          },
+          async run() {
+            if (/INSERT INTO alarm_overrides/.test(query)) {
+              state.mutations += 1;
+              persisted = { id: values[0], profile_id: values[1], target_date: values[2], action: values[3], wake_at: values[4], expires_at: values[9] };
+            }
+            if (/INSERT INTO alarm_audit/.test(query)) {
+              if (state.auditFails) throw new Error("injected audit failure after commit");
+              state.mutations += 1;
+            }
+            if (/INSERT INTO alarm_overrides|INSERT INTO alarm_audit/.test(query)) return { meta: { changes: 1 } };
+            throw new Error(`unexpected run SQL: ${query}`);
+          },
+        };
+      },
+    },
+  };
+  return env;
+}
+
+test("actual public command handler rejects missing/stale preview state and accepts current version with one wake fetch", async (t) => {
+  const { default: worker, publicAlarmCommandVersion } = await loadWorker();
+  const originalFetch = global.fetch;
+  const targetDate = nextWeekdayDate(1);
+  const baseline = { next_school_day: targetDate, wake_time: "07:15", wake_at: isoAtIsrael(targetDate, "07:15"), shortcut_action: "set", fallback_status: "scheduled", enabled: true };
+  const wake = {
+    profile_id: "student_123", generated_at: new Date().toISOString(), next_school_day: null, wake_at: null, wake_time: null, shortcut_action: "clear", fallback_status: "no-lessons", stale: false,
+    next_alarm: { profile_id: "student_123", generated_at: new Date().toISOString(), ...baseline, alarm_baseline: baseline, alarm_control: {} },
+  };
+  let fetches = 0;
+  global.fetch = async () => { fetches += 1; return new Response(JSON.stringify(wake)); };
+  t.after(() => { global.fetch = originalFetch; });
+  const send = (env, body) => worker.fetch(new Request("https://worker.example/public/profiles/student_123/alarm-command", {
+    method: "POST", headers: { Origin: "https://school.example", "content-type": "application/json", "CF-Connecting-IP": "127.0.0.1" }, body: JSON.stringify(body),
+  }), env);
+
+  let response = await send(publicCommandEnv(), { action: "clear" });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /target_date is required/);
+  assert.equal(fetches, 0);
+
+  response = await send(publicCommandEnv(), { action: "clear", target_date: targetDate });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /command_version is required/);
+  assert.equal(fetches, 0);
+
+  response = await send(publicCommandEnv(), { action: "clear", target_date: "2099-01-01", command_version: "stale" });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /target_date changed/);
+  assert.equal(fetches, 1);
+
+  const staleVersionEnv = publicCommandEnv();
+  response = await send(staleVersionEnv, { action: "clear", target_date: targetDate, command_version: "stale-version" });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /alarm command changed/);
+  assert.equal(staleVersionEnv.__state.mutations, 0);
+  assert.equal(fetches, 2);
+
+  const range = { id: "range-1", profile_id: "p1", target_date: targetDate, target_date_end: nextWeekdayDate(2), action: "clear", expires_at: new Date(Date.now() + 86400000).toISOString() };
+  const rangeEnv = publicCommandEnv([range]);
+  response = await send(rangeEnv, { action: "restore", target_date: targetDate, command_version: await publicAlarmCommandVersion("p1", targetDate, [range]) });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /range alarm changes are not supported/i);
+  assert.equal(rangeEnv.__state.mutations, 0);
+  assert.equal(fetches, 3);
+
+  const version = await publicAlarmCommandVersion("p1", targetDate, []);
+  const acceptedEnv = publicCommandEnv();
+  fetches = 0;
+  response = await send(acceptedEnv, { action: "clear", target_date: targetDate, command_version: version });
+  assert.equal(response.status, 202);
+  const accepted = await response.json();
+  assert.equal(accepted.target_date, targetDate);
+  assert.equal(accepted.wake.next_alarm.alarm_control.override_active, true);
+  assert.match(accepted.wake.next_alarm.alarm_control.command_version, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(fetches, 1);
+  assert.equal(acceptedEnv.__state.mutations, 2);
+
+  const auditFailureEnv = publicCommandEnv();
+  auditFailureEnv.__state.auditFails = true;
+  response = await send(auditFailureEnv, { action: "clear", target_date: targetDate, command_version: version });
+  assert.equal(response.status, 202);
+  const savedWithWarning = await response.json();
+  assert.equal(savedWithWarning.status, "accepted_with_warnings");
+  assert.match(savedWithWarning.warnings.join(" "), /audit/i);
+  assert.equal(savedWithWarning.wake.next_alarm.alarm_control.override_active, true);
+  assert.equal(auditFailureEnv.__state.mutations, 1);
 });
 
 test("public command responses carry the effective wake and accept persisted publish failures", () => {
@@ -237,3 +422,139 @@ test("public command responses carry the effective wake and accept persisted pub
   assert.doesNotMatch(workerSource, /alarm change was saved, but publishing is temporarily unavailable[\s\S]{0,80}503/);
 });
 
+test("public POST requires preview date/version and rejects overlapping ranges before mutation", () => {
+  assert.match(workerSource, /target_date is required[\s\S]{0,200}409/);
+  assert.match(workerSource, /command_version is required[\s\S]{0,200}409/);
+  assert.match(workerSource, /target_date changed; refresh and try again/);
+  assert.match(workerSource, /range alarm changes are not supported[\s\S]{0,200}409/i);
+  assert.match(workerSource, /next_alarm[\s\S]{0,300}command_version/);
+});
+
+test("settings audit failure after CAS reports committed mutation and still attempts publish", async (t) => {
+  const { finalizeSettingsMutation } = await loadWorker();
+  const originalFetch = global.fetch;
+  let dispatches = 0;
+  let historyWrites = 0;
+  global.fetch = async () => { dispatches += 1; return new Response(null, { status: 204 }); };
+  t.after(() => { global.fetch = originalFetch; });
+  const env = {
+    GITHUB_DISPATCH_TOKEN: "token",
+    GITHUB_REPO: "owner/repo",
+    GITHUB_REF: "main",
+    DB: {
+      prepare(query) {
+        return {
+          bind() { return this; },
+          async run() {
+            if (/alarm_settings_history/.test(query)) { historyWrites += 1; return { meta: { changes: 1 } }; }
+            if (/alarm_audit/.test(query)) throw new Error("injected audit failure");
+            throw new Error(`unexpected SQL: ${query}`);
+          },
+        };
+      },
+    },
+  };
+  const result = await finalizeSettingsMutation(env, {
+    scope: "global", previousSettings: { enabled: true }, action: "global-settings-updated",
+    details: { settings: { enabled: false } }, publishId: "global-alarm-settings-updated",
+  });
+  assert.equal(historyWrites, 1);
+  assert.equal(dispatches, 1);
+  assert.equal(result.status, "accepted_with_warnings");
+  assert.match(result.warnings.join(" "), /audit/i);
+  assert.equal(result.publish_status, "queued");
+});
+
+test("admin settings and bulk clients carry versions and render partial outcomes", () => {
+  assert.match(workerSource, /settings_version:globalVersion\(\)/);
+  assert.match(workerSource, /settings_version:button\.dataset\.version/);
+  assert.match(workerSource, /command_version:button\.dataset\.commandVersion/);
+  assert.match(workerSource, /settings_versions:versions\.settings/);
+  assert.match(workerSource, /command_versions:versions\.commands/);
+  assert.match(workerSource, /"Applied: "\+Number\(result\.applied/);
+  assert.match(workerSource, /status==="accepted_with_warnings"/);
+  assert.match(workerSource, /return json\(payload, failed\.length \? 207 : 200\)/);
+});
+
+test("admin null or missing version requests are rejected before mutation", () => {
+  assert.match(workerSource, /requestJsonObject\(request\)/);
+  assert.match(workerSource, /settings_versions for every selected profile are required/);
+  assert.match(workerSource, /command_versions for every selected profile are required/);
+  assert.match(workerSource, /profile alarm settings changed; refresh and try again/);
+  assert.match(workerSource, /Commands overlapping range alarm changes are not supported until range policy is chosen/);
+});
+
+async function adminFixture(overrides = []) {
+  const digest = async (value) => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))).toString("base64url");
+  const csrfHash = await digest("fixture-csrf");
+  const state = { settings: { p1: "{}", p2: "{}" }, mutations: 0, auditFails: false };
+  const env = { ADMIN_ORIGIN: "https://worker.example", GITHUB_DISPATCH_TOKEN: "fixture", GITHUB_REPO: "fixture/repo", __state: state,
+    DB: { prepare(query) { let args = []; return {
+      bind(...values) { args = values; return this; },
+      async first() {
+        if (/FROM sessions/.test(query)) return { csrf_hash: csrfHash, expires_at: new Date(Date.now() + 3600000).toISOString() };
+        if (/INSERT INTO rate_limits/.test(query)) return { attempts: 1 };
+        if (/FROM profiles WHERE id/.test(query)) return { id: args[0], public_id: `public_${args[0]}`, name: "Fixture", active: 1 };
+        if (/FROM alarm_profile_settings/.test(query)) return { settings_json: state.settings[args[0]] };
+        throw new Error(`unexpected first SQL: ${query}`);
+      },
+      async all() {
+        if (/FROM alarm_overrides/.test(query)) return { results: overrides };
+        throw new Error(`unexpected all SQL: ${query}`);
+      },
+      async run() {
+        if (/UPDATE alarm_profile_settings/.test(query)) {
+          if (state.settings[args[2]] !== args[3]) return { meta: { changes: 0 } };
+          state.settings[args[2]] = args[0]; state.mutations += 1;
+          return { meta: { changes: 1 } };
+        }
+        if (/INSERT INTO alarm_settings_history/.test(query)) return { meta: { changes: 1 } };
+        if (/INSERT INTO alarm_audit/.test(query)) {
+          if (state.auditFails) throw new Error("injected audit failure");
+          return { meta: { changes: 1 } };
+        }
+        throw new Error(`unexpected run SQL: ${query}`);
+      },
+    }; } },
+  };
+  const send = (path, body) => new Request(`https://worker.example${path}`, { method: "POST", headers: { Origin: env.ADMIN_ORIGIN, Cookie: "__Host-shahaf_session=fixture-session", "X-CSRF-Token": "fixture-csrf", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { env, send };
+}
+
+test("authenticated admin handler rejects null, missing command versions and covering ranges without mutation", async () => {
+  const { default: worker, publicAlarmCommandVersion } = await loadWorker();
+  const targetDate = nextWeekdayDate(1);
+  const fixture = await adminFixture();
+  for (const body of [null, { action: "clear" }, { action: "clear", target_date: targetDate }]) {
+    const response = await worker.fetch(fixture.send("/api/profiles/p1/alarm-command", body), fixture.env);
+    assert.equal(response.status, 409);
+    assert.equal(fixture.env.__state.mutations, 0);
+  }
+  const range = { id: "range", profile_id: "p1", target_date: targetDate, target_date_end: nextWeekdayDate(2), action: "clear", expires_at: new Date(Date.now() + 86400000).toISOString() };
+  const ranged = await adminFixture([range]);
+  const response = await worker.fetch(ranged.send("/api/profiles/p1/alarm-command", { action: "clear", target_date: targetDate, command_version: await publicAlarmCommandVersion("p1", targetDate, [range]) }), ranged.env);
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /range/i);
+  assert.equal(ranged.env.__state.mutations, 0);
+});
+
+test("actual bulk handler reports committed audit failure and stale second profile separately, then publishes", async (t) => {
+  const { default: worker, settingsVersion } = await loadWorker();
+  const fixture = await adminFixture();
+  fixture.env.__state.auditFails = true;
+  let dispatches = 0;
+  const originalFetch = global.fetch;
+  global.fetch = async () => { dispatches += 1; return new Response(null, { status: 204 }); };
+  t.after(() => { global.fetch = originalFetch; });
+  const response = await worker.fetch(fixture.send("/api/alarm-bulk", { action: "pause", profile_ids: ["p1", "p2"], settings_versions: { p1: await settingsVersion("{}"), p2: "stale" } }), fixture.env);
+  assert.equal(response.status, 207);
+  const result = await response.json();
+  assert.equal(result.status, "partial");
+  assert.equal(result.applied, 1);
+  assert.equal(result.results[0].status, "applied_with_warning");
+  assert.equal(result.results[1].status, "conflict");
+  assert.equal(JSON.parse(fixture.env.__state.settings.p1).enabled, false);
+  assert.equal(fixture.env.__state.settings.p2, "{}");
+  assert.equal(fixture.env.__state.mutations, 1);
+  assert.equal(dispatches, 1);
+});
