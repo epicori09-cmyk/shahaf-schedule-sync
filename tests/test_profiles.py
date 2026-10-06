@@ -231,6 +231,24 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(select_exams(exams, {}, lessons=nitay_lessons)[0].subject, "מזרחנות")
         self.assertEqual(select_exams(exams, {}, lessons=ori_lessons), [])
 
+    def test_psychology_exam_matches_only_nitays_selected_group(self) -> None:
+        exam = Exam(
+            date(2027, 6, 9),
+            "פסיכולוגיה",
+            0,
+            0,
+            title="מתכונת בפסיכולוגיה",
+            teacher="צ'ופ דנה",
+        )
+        nitay_lessons = [
+            Lesson(date(2026, 10, 6), 4, time(10, 45), time(11, 25), "פסיכולוגיה", "צ'ופ דנה", "י״א 7 - 214"),
+        ]
+        other_group_lessons = [
+            Lesson(date(2026, 10, 6), 4, time(10, 45), time(11, 25), "פסיכולוגיה", "מורה אחרת", "י״א 7 - 214"),
+        ]
+        self.assertEqual(select_exams([exam], {}, lessons=nitay_lessons)[0].subject, "פסיכולוגיה")
+        self.assertEqual(select_exams([exam], {}, lessons=other_group_lessons), [])
+
 
 if __name__ == "__main__":
     unittest.main()

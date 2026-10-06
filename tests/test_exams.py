@@ -21,6 +21,7 @@ EXAMS_HTML = """<!doctype html>
   <li class="ChangesInfo">12.09.2026, <b>מבחן באנגלית 5 יח״ל מואץ</b> משיעור 1 עד שיעור 3 לכיתות: יא-1...יא-9</li>
   <li class="ChangesInfo">15.09.2026, <b>מבחן פתיחת שנה בביולוגיה</b> משיעור 1 עד שיעור 3 לכיתות: יא-2</li>
   <li class="ChangesInfo">16.09.2026, <b>מבחן במזרחנות</b> משיעור 1 עד שיעור 3 לכיתות: יא-2 בקבוצה של גלוסקא שירי, חדר: י״א 7 - 214</li>
+  <li class="ChangesInfo">09.06.2027, <b>מתכונת בפסיכולוגיה</b> שיעור 0 לכיתות: יא-1...יא-3, יא-7, יא-8, יא-11 בקבוצה של צ&#39;ופ דנה</li>
 </ul></body></html>"""
 
 
@@ -84,7 +85,7 @@ class ExamTests(unittest.TestCase):
             expected_class_id="11",
             include_all=True,
         )
-        self.assertEqual(len(snapshot.exams), 7)
+        self.assertEqual(len(snapshot.exams), 8)
         math_groups = [item for item in snapshot.exams if item.subject.startswith("מתמטיקה")]
         self.assertEqual(len(math_groups), 1)
         self.assertEqual(math_groups[0].teacher, "מתמטיקה")
@@ -93,6 +94,22 @@ class ExamTests(unittest.TestCase):
         mizrahnut = next(item for item in snapshot.exams if item.subject == "מזרחנות")
         self.assertEqual(mizrahnut.teacher, "גלוסקא שירי")
         self.assertEqual(mizrahnut.room, "י״א 7 - 214")
+
+    def test_psychology_exam_is_parsed_for_included_class(self) -> None:
+        html = EXAMS_HTML.replace(
+            '<option value="11" selected="selected">יא - 2</option>',
+            '<option value="16" selected="selected">יא - 7</option>',
+        )
+        snapshot = parse_exams_html(
+            html,
+            date(2026, 9, 2),
+            expected_class_number=7,
+            expected_class_id="16",
+            include_all=True,
+        )
+        psychology = next(item for item in snapshot.exams if item.subject == "פסיכולוגיה")
+        self.assertEqual(psychology.teacher, "צ'ופ דנה")
+        self.assertEqual(psychology.start_period, 0)
 
     def test_reconcile_adds_four_day_seven_pm_calendar_alarm(self) -> None:
         snapshot = parse_exams_html(EXAMS_HTML, date(2026, 9, 2), expected_class_number=2, expected_class_id="11")

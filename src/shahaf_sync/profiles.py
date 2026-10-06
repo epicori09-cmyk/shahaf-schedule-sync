@@ -60,6 +60,7 @@ def _exam_family(value: str) -> str:
         ("ביולוג", "biology"),
         ("כימ", "chemistry"),
         ("מזרחנות", "mizrahnut"),
+        ("פסיכולוג", "psychology"),
         ("ערבית", "arabic"),
         ("אזרחות", "civics"),
         ("גיאוגרפ", "geography"),
