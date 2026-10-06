@@ -2,6 +2,20 @@
 
 Status: NOT PASSED; this is a continuation checkpoint, not production approval.
 
+## Later user-requested compatibility update
+
+The user explicitly requested matching the installed false guards centrally,
+not editing each phone to leave. Commit `56d38e8` now serializes canonical
+root leave as text `"false"` on all Worker and Pages feeds; internal and
+nested actions, set/clear and safety decisions are unchanged. This supersedes
+the false-versus-leave guard objection in the historical audit below for the
+reported false-check Shortcuts. Older leave-only Shortcuts must migrate.
+244 Python / 25 Node passed; scoped changed Python coverage 85%; six safety
+mutations detected. Worker version `7c547670-263a-4006-b96a-781d0f0bbb22` and
+Pages run `37496168292` deployed successfully. Six Worker and six static roots
+verified; both live Alma preserve roots confirmed string false. Phone timing
+and physical Clock evidence remain unresolved. See FALSE_SHORTCUT_TDD.md.
+
 ## Deployment checkpoint
 
 - Production source commit `0129581d3c5af2fbade144315ff9c79ac216c374` pushed to main.
