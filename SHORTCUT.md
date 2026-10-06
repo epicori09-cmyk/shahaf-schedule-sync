@@ -9,11 +9,14 @@ The user reports an initial `AlarmAction is false` stop, followed by deletion
 of exact-label `SHAHAF` alarms, a `clear` stop, then `wake_at` → Create Alarm.
 There is **no `alarm_for_today` condition**. Daily runs are 05:00 and 06:40.
 
-This initial condition is unsafe: the endpoint returns text `leave`, not
-Boolean `false`. Change it to **AlarmAction is leave → Stop This Shortcut**
-before Find/Delete. A stronger guard permits deletion only when the action
-is exactly `set` or `clear`; missing/unknown actions stop. Validate a `set`
-timestamp before deleting the existing alarm. No phone repair is confirmed.
+At the user's request, the Shortcut-facing root now returns the exact text
+`"false"` for preservation, matching **AlarmAction is false → Stop This
+Shortcut** before Find/Delete. This is a JSON string, not Boolean `false`;
+the reported Get Text step therefore receives the literal word `false`.
+No individual phone change is required for the reported false guard. A stronger
+guard still permits deletion only for `set` or `clear`, stopping on missing or
+unknown actions. Validate a `set` timestamp before deleting the existing alarm.
+Any older Shortcut configured only to stop on `leave` must accept `false` now.
 
 The 06:40 run cannot apply new cancellations before a 06:30 alarm. Add an
 earlier refresh if that window is unacceptable. Server sync cannot run a
@@ -57,11 +60,17 @@ the root fields, never that preview. A future calendar date alone cannot make
 an iPhone Clock alarm date-specific. Do not combine the historical daily-only
 guard with the current root contract without reviewing the delete/create flow.
 
+Internal planning, nested previews and baseline actions continue to use
+`leave` for preservation. Only the Shortcut-facing root maps it to `"false"`.
+The Worker accepts both old and new published roots during deployment, and
+website/Alexa consumers recognize the new wire contract without changing
+the underlying safety decision.
+
 The schedule and transit wake planners explicitly ignore Friday and Saturday
 dates (the Israeli weekend). Sunday remains a valid school day. When a valid
 response has no school on the current weekend, the default `clear` action
 removes only the app's exact labeled alarm; stale or uncertain responses still
-return `leave` so an existing alarm is preserved.
+return `"false"` so an existing alarm is preserved.
 
 The current Ori Shortcut endpoint is:
 
@@ -89,8 +98,9 @@ do not leave a second spelling's old alarms behind. Add these actions in order:
 3. **Get Dictionary Value** for `shortcut_action` (using the Dictionary output
    from step 2).
 4. Set that text as `AlarmAction`. If it is neither exactly `set` nor
-   exactly `clear`, **Stop This Shortcut**. This includes `leave`, missing
-   values and unknown actions; never treat `false` as the preservation action.
+   exactly `clear`, **Stop This Shortcut**. This includes `false`, missing
+   values and unknown actions. Existing setups may keep the reported
+   **AlarmAction is false → Stop This Shortcut** condition before deletion.
 5. If `AlarmAction` is `set`, get `wake_at` from the original dictionary,
    use **Get Dates from Input**, and set the result as `WakeDate`. Require
    exactly one date, later than **Current Date**; otherwise stop. Do this
@@ -109,15 +119,16 @@ do not leave a second spelling's old alarms behind. Add these actions in order:
 `shortcut_action` is deliberately plain text so the Shortcut avoids fragile
 Boolean pickers:
 
-- `leave`: Shahaf data is stale or unavailable. Stop before touching alarms.
+- `false`: preserve the existing alarm. Stop before touching alarms. This is
+  literal text, not a JSON Boolean; it replaces the previous root `leave` value.
 - `clear`: confirmed no-school/manual cancellation or an unsafe future Clock occurrence. Delete only
   the labeled school alarm, then stop.
 - `set`: a valid school-day wake alarm whose next Clock occurrence matches
-  the planned date/time is available. An elapsed root returns `leave`.
+  the planned date/time is available. An elapsed root returns `false`.
 
 The schedule workflow uses NVIDIA NIM as an additional conservative gate for
 destructive cases. If NIM is unavailable or sees a possible exam/other
-obligation, the endpoint returns `leave`, so the Shortcut leaves the current
+obligation, the endpoint returns `false`, so the Shortcut leaves the current
 alarm alone. NIM never has access to the Gist token.
 
 ## Add the automatic triggers

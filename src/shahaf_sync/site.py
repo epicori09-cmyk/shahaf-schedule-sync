@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from .ics import Calendar, IcsEvent
 from .events import event_is_past
-from .alarm_controls import apply_alarm_controls, public_alarm_settings, protect_clock_occurrence
+from .alarm_controls import apply_alarm_controls, public_alarm_settings, protect_clock_occurrence, shortcut_wire_payload
 from .public_transit import public_transit_payload
 from .model import PERIOD_TIMES
 from .model import Exam
@@ -750,11 +750,11 @@ def render_site(
     )
     if publish_wake:
         (output_dir / "wake.json").write_text(
-            json.dumps(wake_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            json.dumps(shortcut_wire_payload(wake_data), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
     elif safe_transit_wake is not None:
         (output_dir / "wake.json").write_text(
-            json.dumps(safe_transit_wake, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            json.dumps(shortcut_wire_payload(safe_transit_wake), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
     status = (
@@ -963,7 +963,7 @@ let events = activeProfile.events || [];
      return body;
    }} finally {{ clearTimeout(timer); }}
  }}
- function validAlarmPayload(payload) {{ return payload && payload.profile_id === activeProfile.id && ["set", "clear", "leave"].includes(payload.shortcut_action); }}
+ function validAlarmPayload(payload) {{ return payload && payload.profile_id === activeProfile.id && ["set", "clear", "leave", "false"].includes(payload.shortcut_action); }}
  function upcomingAlarm(payload) {{ return validAlarmPayload(payload?.next_alarm) ? payload.next_alarm : payload; }}
  async function refreshAlarmState() {{
    if (!publicWakeEndpoint || alarmRefreshInFlight || alarmBusy) return;

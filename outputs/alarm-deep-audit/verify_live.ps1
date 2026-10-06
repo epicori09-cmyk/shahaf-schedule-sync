@@ -15,7 +15,7 @@ foreach ($student in $students.GetEnumerator() | Sort-Object Name) {
   $generation=[datetimeoffset]::Parse($worker.generated_at)
   $age=[datetimeoffset]::UtcNow-$generation
   if ($age.TotalHours -gt 3 -or $age.TotalMinutes -lt -5) { throw ('Invalid feed age: '+$student.Name) }
-  if ($worker.shortcut_action -notin @('set','clear','leave')) { throw 'Invalid root action' }
+  if ($worker.shortcut_action -notin @('set','clear','false') -or $pages.shortcut_action -notin @('set','clear','false')) { throw 'Invalid Shortcut root action' }
   if ($worker.shortcut_action -eq 'set') {
     $wake=[datetimeoffset]::Parse($worker.wake_at)
     $zone=[timezoneinfo]::FindSystemTimeZoneById('Israel Standard Time')

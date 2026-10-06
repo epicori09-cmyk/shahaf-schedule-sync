@@ -47,6 +47,8 @@ def select_effective_wake(data: dict, now: datetime, *, profile_id: str = PROFIL
     """Validate an effective Worker envelope before authorizing any Alexa change."""
     if now.tzinfo is None or not isinstance(data, dict):
         raise ValueError("invalid wake envelope or current time")
+    if data.get("shortcut_action") == "false":
+        data = {**data, "shortcut_action": "leave"}
     zone = ZoneInfo("Asia/Jerusalem")
     today = now.astimezone(zone).date()
     generated = _instant(data.get("generated_at"))

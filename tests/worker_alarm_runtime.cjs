@@ -418,7 +418,7 @@ test("actual public command handler rejects missing/stale preview state and acce
 
 test("public command responses carry the effective wake and accept persisted publish failures", () => {
   assert.match(workerSource, /publish_status/);
-  assert.match(workerSource, /wake:\s*await effectivePublicWake/);
+  assert.match(workerSource, /wake:\s*shortcutWirePayload\(await effectivePublicWake/);
   assert.doesNotMatch(workerSource, /alarm change was saved, but publishing is temporarily unavailable[\s\S]{0,80}503/);
 });
 

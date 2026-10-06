@@ -35,6 +35,12 @@ The existing `GIST_TOKEN`, `NVIDIA_API_KEY`, and Alexa secrets are unchanged.
 
 ## Alarm control center
 
+Shortcut-facing `wake.json` root actions are text `false`, `clear`, and `set`.
+`false` means stop before Find/Delete, preserving the existing alarm. It is a
+JSON string, not a Boolean. Internal/nested planning actions retain `leave`;
+only public root serialization translates it. This matches the installed
+false-check Shortcuts without per-student configuration changes.
+
 The Worker API implements managed-profile-only alarm controls. It stores
 global defaults and per-profile overrides in D1, then includes the effective
 settings in the existing private profile bundle consumed by the Pages

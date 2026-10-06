@@ -629,6 +629,11 @@ async function nextPublicAlarmDate(env, publicId, providedWake = null) {
   const currentTarget = typeof payload.next_school_day === "string" ? payload.next_school_day : "";
   return validTargetDate(currentTarget) && currentTarget > today ? currentTarget : null;
 }
+function shortcutWirePayload(wake) {
+  if (!wake) return wake;
+  return { ...wake, shortcut_action: wake.shortcut_action === "leave" ? "false" : wake.shortcut_action };
+}
+
 async function fetchPublicWake(env, publicId) {
   const origin = publicSiteURL(env);
   if (!origin) return null;
@@ -641,7 +646,10 @@ async function fetchPublicWake(env, publicId) {
       signal: controller.signal,
     });
     if (!response.ok) return null;
-    const payload = await response.json().catch(() => null);
+    const rawPayload = await response.json().catch(() => null);
+    // Normalize only the Shortcut root; all safety/override decisions stay
+    // canonical. Accept both old Pages leave and new text-false during rollout.
+    const payload = rawPayload?.shortcut_action === "false" ? { ...rawPayload, shortcut_action: "leave" } : rawPayload;
     if (validPublicWakeIdentity(payload, publicId) && (Boolean(payload.stale) || generatedAtAge(payload.generated_at) > PUBLIC_WAKE_MAX_AGE_MS)) {
       return safeStalePublicWake(payload, publicId);
     }
@@ -1187,7 +1195,7 @@ export default {
       if (!row) return json({ error: "profile not found" }, 404, cors);
       const wake = await effectivePublicWake(env, row);
       if (!wake) return json({ error: "alarm data is temporarily unavailable" }, 503, { ...cors, "cache-control": "no-store" });
-      return json(wake, 200, { ...cors, "cache-control": "no-store" });
+      return json(shortcutWirePayload(wake), 200, { ...cors, "cache-control": "no-store" });
     }
     const publicAlarmCommand = url.pathname.match(/^\/public\/profiles\/([^/]+)\/alarm-command$/);
     if (publicAlarmCommand) {
@@ -1242,7 +1250,7 @@ export default {
           if (Number(result.meta?.changes || 0) !== 1) return json({ error: "alarm command changed; refresh and try again" }, 409, cors);
         }
         const finalized = await finalizeAlarmMutation(env, row.id, "alarm-command-restore", { target_date: targetDate, immediate: true, mode: "correct-original-time", baseline_source: "current-published-baseline", baseline_action: restoreSnapshot.shortcut_action, source: "public-profile" }, "student");
-        return json({ ...finalized, action, target_date: targetDate, wake_time: restoreSnapshot.wake_time || null, immediate: true, wake: await effectivePublicWake(env, row, { wake: publicWake }) }, 202, { ...cors, "cache-control": "no-store" });
+        return json({ ...finalized, action, target_date: targetDate, wake_time: restoreSnapshot.wake_time || null, immediate: true, wake: shortcutWirePayload(await effectivePublicWake(env, row, { wake: publicWake })) }, 202, { ...cors, "cache-control": "no-store" });
       }
       let wakeAt = null;
       let wakeTime = null;
@@ -1266,7 +1274,7 @@ export default {
       });
       if (!saved) return json({ error: "alarm command changed; refresh and try again" }, 409, cors);
       const finalized = await finalizeAlarmMutation(env, row.id, `alarm-command-${action}`, { target_date: targetDate, wake_time: wakeTime, source: "public-profile" }, "student");
-      return json({ ...finalized, action, target_date: targetDate, wake_time: wakeTime, wake: await effectivePublicWake(env, row, { wake: publicWake }) }, 202, { ...cors, "cache-control": "no-store" });
+      return json({ ...finalized, action, target_date: targetDate, wake_time: wakeTime, wake: shortcutWirePayload(await effectivePublicWake(env, row, { wake: publicWake })) }, 202, { ...cors, "cache-control": "no-store" });
     }
     const check = await auth(request, env, csrfRequired(request)); if (check.error) return check.error;
     if (url.pathname === "/api/classes" && request.method === "GET") {

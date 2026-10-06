@@ -430,6 +430,18 @@ def protect_clock_occurrence(wake: Mapping[str, Any], *, now: datetime | None = 
     return result
 
 
+def shortcut_wire_payload(wake: Mapping[str, Any]) -> dict[str, Any]:
+    """Match installed text-false Shortcuts without changing internal actions.
+
+    Only root fields are consumed by Clock. Nested planning/baseline fields
+    retain canonical leave/set/clear semantics for the website and controls.
+    """
+    result = dict(wake)
+    if result.get("shortcut_action") == "leave":
+        result["shortcut_action"] = "false"
+    return result
+
+
 def public_alarm_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
     """Return only fields safe to publish beside a managed wake payload."""
 
