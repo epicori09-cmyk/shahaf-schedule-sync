@@ -27,7 +27,8 @@ foreach ($student in $students.GetEnumerator() | Sort-Object Name) {
   }
   if ($worker.shortcut_action -eq 'clear' -and ($null -ne $worker.wake_at -or $null -ne $worker.wake_time)) { throw 'Inconsistent clear envelope' }
   if ($worker.next_alarm.alarm_control.command_version -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Missing live command version' }
-  if ($sw -notmatch ('shahaf-schedule-'+[regex]::Escape($student.Value)+'-v7') -or $sw -notmatch 'relativePath === "wake.json"') { throw 'Service-worker bypass/version not deployed' }
+  $cacheSlug=$student.Value -replace '[^a-zA-Z0-9-]', '-'
+  if ($sw -notmatch ('shahaf-schedule-'+[regex]::Escape($cacheSlug)+'-v7') -or $sw -notmatch 'relativePath === "wake.json"') { throw ('Service-worker bypass/version not deployed: '+$student.Name+' '+(($sw -split "`n")[0])) }
   if ($student.Name -eq 'Ori' -and $worker.next_alarm.alarm_control.settings.wake_buffer_minutes -ne 75) { throw 'Unexpected Ori buffer setting' }
   if ($student.Name -eq 'Nitay' -and $worker.next_alarm.alarm_control.settings.wake_buffer_minutes -ne 25) { throw 'Nitay buffer changed' }
   [pscustomobject]@{name=$student.Name; action=$worker.shortcut_action; date=$worker.next_school_day; time=$worker.wake_time; preview_date=$worker.next_alarm.next_school_day; preview_time=$worker.next_alarm.wake_time; generated_at=$worker.generated_at; stale=$worker.stale; version_ok=$true; cache_v7=$true}

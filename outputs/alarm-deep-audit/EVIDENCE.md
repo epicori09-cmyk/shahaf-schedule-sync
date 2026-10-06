@@ -2,6 +2,15 @@
 
 Status: NOT PASSED; this is a continuation checkpoint, not production approval.
 
+## Deployment checkpoint
+
+- Production source commit `0129581d3c5af2fbade144315ff9c79ac216c374` pushed to main.
+- `npx wrangler deploy`: exit 0; Worker version `d99ad754-f832-4373-a760-63298cb4c3e0`.
+- GitHub schedule/Pages run `37484713245`: SUCCESS, 1m48s. Sync, retired-path check, upload, first Pages deployment and acknowledgement succeeded. Alexa updater step explicitly skipped because its access token is not configured; this is not an Alexa production verification.
+- `verify_live.ps1`: exit 0, six of six live Worker/Pages profiles passed identity, generation age, supported root action, Clock occurrence (when set), command-version, cache-v7/bypass and Ori/Nitay buffer checks. Initial script failure was a verifier bug: cache slug normalization converts underscores to hyphens; corrected to match the renderer, without changing production.
+- Live October 7 previews: Ori 06:45, Nitay 07:20, Jonathan 07:15, Alma/Shahar/Neta 06:30. Neta root and preview action are `leave`, with alarm_safety=blocked: async-learning event NIM review timed out. Her displayed time is planning information, NOT authorization to create an alarm. No production alarm commands were issued for testing.
+- Nitay read-only browser checks: Now/Schedule/Exams in Hebrew and English at 375/768/1440 widths. No page-wide horizontal overflow; scheduled time visible; mobile input and Move button disjoint; Restore disabled with no active override; captured error/warning logs empty. Screenshot proof: `deployed-alarm-he-viewport.jpg`. Full-page capture showed renderer/capture clipping unlike the viewport; the viewport image is the visual evidence. No strict image baseline comparison, Core Web Vitals measurement, axe/screen-reader check, physical iPhone test or production cancel/move/restore click claimed.
+
 Baseline a89e683: Python 193 passed, Node 13 passed (prior continuation).
 Latest frozen candidate: `$env:PYTHONPATH='src'; uv run python -m unittest discover -s tests`: exit 0, 242 passed, 0 failed, 0 skipped. `node tests/worker_alarm_runtime.cjs`: exit 0, 24 passed, 0 failed, 0 skipped. `compileall -q src scripts alexa`, `node --check admin/worker/src/index.js`, and `git diff --check`: exit 0.
 `$env:PYTHONPATH='src'; uv run python outputs/alarm-deep-audit/run_mutations.py`: exit 0; 6/6 deliberate defects detected in temporary isolated copies. Clock occurrence, obsolete Restore, cross-origin cache interception, stale command version, period-zero fallback, cancellation teacher identity. No mutations in working files. `git diff --check`: exit 0.
@@ -34,7 +43,7 @@ Latest frozen candidate: `$env:PYTHONPATH='src'; uv run python -m unittest disco
 - Historical raw manual EXDATE ownership already overlapping an old event marker cannot be reconstructed from the old format.
 - A fetched complete HTTP response is not proof that Shahaf's upstream data itself is current. Missing source changes cannot be invented.
 - All currently known profiles have transit disabled; conditional caching of the large GTFS archive remains unimplemented. NIM repeated-context caching and a whole-process deadline remain unimplemented beyond per-call/workflow caps.
-- Fresh reviewer rechecks, final integrated review, deployment and live/visual verification pending below. No acceptance criteria have been downgraded.
+- Reviewer rechecks, bounded fresh integrated review, Worker/Pages deployment and read-only live/browser checks completed below. Full-system acceptance remains unproven; no acceptance criteria have been downgraded.
 - Repaired expired/consumed command resurrection, admin date/range CAS bypass, partial bulk commits and global/profile settings concurrency. Real SQLite predicate tests cover expiry/consumption and settings CAS; authenticated handler fixtures cover null/missing versions/ranges. A two-profile bulk fixture confirms an audit failure after the first commit still publishes and reports the stale second profile separately, without mutating it.
 - Additional post-commit alarm audit failure reproduced as a throwing public response, then repaired through shared finalization for public clear/set/restore and admin commands. Runtime fixture confirms 202 accepted_with_warnings, effective override present, and no duplicate mutation. The alarm admin UI enhancement remains intentionally not injected; API coverage is not proof of visible dashboard controls.
 - Original rejecting operations reviewer Dewey explicitly withdrew all four Alexa objections after mocked rechecks; original adversarial reviewer Parfit explicitly accepted the repaired source/photo/cancellation reproducers, including replacements and period zero. Both are read-only rechecks, not production or full-gauntlet approval.
@@ -52,9 +61,9 @@ Latest frozen candidate: `$env:PYTHONPATH='src'; uv run python -m unittest disco
 | AC03 | UNPROVEN | Date/version/range SQL tests pass; range product policy pending |
 | AC04 | UNPROVEN | Time/DST regressions pass; phone repair/Clock proof absent |
 | AC05 | UNPROVEN | Structural source, events and identity tests; upstream freshness cannot be independently guaranteed |
-| AC06 | UNPROVEN | Cache and publication rollback tests; deployed recovery pending |
+| AC06 | PASS (bounded) | Cache/publication rollback tests plus successful deployment and live v7 checks; production failure recovery not injected |
 | AC07 | UNPROVEN | One-fetch command test and bounded timeouts; broader efficiency work remains |
-| AC08 | UNPROVEN | Six mutations detected; independent final review pending |
-| AC09 | UNPROVEN | Deployment/live/visual checks pending |
+| AC08 | PASS (bounded) | Six mutations detected; original rejecters and fresh integrated recheck complete; overall phone blockers remain |
+| AC09 | PASS (server/browser scope) | Worker deployed; Pages run successful; six read-only live feeds; bilingual three-tab responsive checks. Alexa skipped; phone proof absent |
 
 Changed source: `.github/workflows/sync.yml`, `SHORTCUT.md`, `admin/worker/src/index.js`, `alexa/lambda_function.py`, `scripts/ack_alarm_commands.py`, `scripts/update_alexa_reminder.py`, `src/shahaf_sync/{alarm_controls,alexa,cli,ics,nim,reconcile,shahaf,site,public_transit}.py`; regression tests under `tests/`; this evidence directory. Unrelated prior screenshot artifacts are preserved and excluded from commits.
