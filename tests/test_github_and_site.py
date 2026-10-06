@@ -45,6 +45,14 @@ class FailingTransport:
 
 
 class GithubAndSiteTests(unittest.TestCase):
+    def test_pink_empty_card_has_contrasting_background(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(output, title="Schedule", generated_at="2026-10-06T05:00:00+03:00", source_url="https://example.invalid", source_updated="fresh", changes=[], stale=False, schedule=[])
+            html = (output / "index.html").read_text(encoding="utf-8")
+            self.assertIn(".theme-pink .lesson-card.is-empty{background:#f4e7ee;color:var(--ink)}", html)
+            self.assertGreater(html.index(".theme-pink .lesson-card.is-empty{"), html.index(".theme-pink .mark,.theme-pink .lesson-card{"))
+
     def test_upcoming_alarm_is_separate_from_todays_shortcut_alarm(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory)
