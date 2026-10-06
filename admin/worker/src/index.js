@@ -42,6 +42,9 @@ const ALARM_DEFAULTS = Object.freeze({
 const ALARM_SETTING_FIELDS = Object.freeze(Object.keys(ALARM_DEFAULTS));
 const ALARM_ROUNDS = new Set([1, 5, 10, 15]);
 const ALARM_ACTIONS = new Set(["set", "clear", "leave"]);
+const PUBLIC_WAKE_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+const PUBLIC_WAKE_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+const PUBLIC_WAKE_TIMEOUT_MS = 4000;
 
 function parseStoredJson(value, fallback = {}) {
   try {
@@ -128,10 +131,14 @@ async function getProfileAlarmSettings(env, profileId) {
   return { settings: checked.settings || {}, updated_at: row.updated_at, updated_by: row.updated_by };
 }
 
+async function getPendingAlarmOverrides(env, profileId) {
+  const rows = await env.DB.prepare("SELECT id, profile_id, target_date, target_date_end, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND consumed_at IS NULL AND expires_at>=?2 ORDER BY created_at DESC")
+    .bind(profileId, now()).all();
+  return rows.results || [];
+}
+
 async function getPendingAlarmOverride(env, profileId) {
-  const row = await env.DB.prepare("SELECT id, profile_id, target_date, target_date_end, action, wake_at, subject, force, reason, created_at, expires_at, published_at, restore_json FROM alarm_overrides WHERE profile_id=?1 AND consumed_at IS NULL AND expires_at>=?2 ORDER BY created_at DESC LIMIT 1")
-    .bind(profileId, now()).first();
-  return row || null;
+  return (await getPendingAlarmOverrides(env, profileId))[0] || null;
 }
 
 async function getAlarmOverrideForTarget(env, profileId, targetDate) {
@@ -242,7 +249,7 @@ function publicCorsHeaders(request, env) {
   if (!origin || origin !== publicSiteOrigin(env)) return {};
   return {
     "access-control-allow-origin": origin,
-    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "Content-Type",
     "access-control-max-age": "600",
     "vary": "Origin",
@@ -276,14 +283,9 @@ function csrfRequired(request) {
 }
 async function rateLimit(env, key, limit, seconds) {
   const bucket = Math.floor(Date.now() / 1000 / seconds) * seconds;
-  const row = await env.DB.prepare("SELECT window_start, attempts FROM rate_limits WHERE bucket_key=?1").bind(key).first();
-  if (!row || Number(row.window_start) !== bucket) {
-    await env.DB.prepare("INSERT OR REPLACE INTO rate_limits(bucket_key, window_start, attempts) VALUES(?1, ?2, 1)").bind(key, bucket).run();
-    return true;
-  }
-  if (Number(row.attempts) >= limit) return false;
-  await env.DB.prepare("UPDATE rate_limits SET attempts=attempts+1 WHERE bucket_key=?1").bind(key).run();
-  return true;
+  const row = await env.DB.prepare("INSERT INTO rate_limits(bucket_key, window_start, attempts) VALUES(?1, ?2, 1) ON CONFLICT(bucket_key) DO UPDATE SET window_start=CASE WHEN rate_limits.window_start=excluded.window_start THEN rate_limits.window_start ELSE excluded.window_start END, attempts=CASE WHEN rate_limits.window_start=excluded.window_start THEN rate_limits.attempts+1 ELSE 1 END WHERE rate_limits.window_start<>excluded.window_start OR rate_limits.attempts<?3 RETURNING attempts")
+    .bind(key, bucket, limit).first();
+  return Boolean(row);
 }
 
 function validatePackage(input) {
@@ -394,6 +396,15 @@ async function triggerPublish(env, profileId) {
   if (!response.ok && response.status !== 204) throw new Error(`GitHub dispatch returned HTTP ${response.status}`);
 }
 
+async function publishStatus(env, profileId) {
+  try {
+    await triggerPublish(env, profileId);
+    return "queued";
+  } catch (_) {
+    return "failed";
+  }
+}
+
 const adminHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Shahaf profile admin</title><style>body{font:16px system-ui;max-width:900px;margin:auto;padding:24px;background:#f6f5f2;color:#252329}main{background:white;border:1px solid #ddd6d0;border-radius:20px;padding:24px}textarea,input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #cfc7bf;border-radius:10px;font:inherit}textarea{min-height:300px;font-family:ui-monospace,monospace}button{padding:11px 16px;border:0;border-radius:10px;background:#292535;color:white;font-weight:700;cursor:pointer;margin:8px 5px 8px 0}.muted{color:#6c6570}.error{color:#a32035;white-space:pre-wrap}.profile{padding:15px 0;border-top:1px solid #eee}.hidden{display:none}code{word-break:break-all}</style></head><body><main><h1>Shahaf profile admin</h1><p class="muted">Private operator console. Names stay in D1 and are never published.</p><section id="login"><input id="password" type="password" placeholder="Admin passphrase"><button id="loginBtn">Log in</button><p id="loginMsg" class="error"></p></section><section id="app" class="hidden"><button id="logoutBtn">Log out</button><h2>Import profile</h2><label>Admin-only student name<input id="studentName" placeholder="Optional only if package already names the student"></label><p><input id="file" type="file" accept=".json,application/json"><button id="loadFile">Load JSON file</button></p><textarea id="payload" placeholder="Paste the complete GPT JSON package here"></textarea><button id="importBtn">Validate and publish</button><pre id="result" class="error"></pre><h2>Profiles</h2><div id="profiles">Loading…</div></section></main><script>let csrf="";const $=function(id){return document.getElementById(id)};async function api(path,options){options=options||{};const headers=Object.assign({"content-type":"application/json"},options.headers||{});if(csrf)headers["X-CSRF-Token"]=csrf;const r=await fetch(path,Object.assign({credentials:"include"},options,{headers:headers}));const body=await r.json().catch(function(){return {}});if(!r.ok)throw new Error(body.error||("HTTP "+r.status));return body}function show(msg){$("result").textContent=msg}async function refresh(){try{const data=await api("/api/profiles",{method:"GET"});$("profiles").innerHTML=data.profiles.map(function(p){return '<div class="profile"><strong>'+p.name+'</strong> <span class="muted">'+(p.active?"active":"disabled")+'</span><br>Public ID: <code>'+p.public_id+'</code><br><a href="'+p.page_url+'" target="_blank">Schedule</a> · <a href="'+p.wake_url+'" target="_blank">wake.json</a><br>Alarm label: <code>'+p.alarm_label+'</code><br><button data-disable="'+p.id+'" '+(p.active?"":"disabled")+'>Disable</button></div>'}).join("")||"No profiles yet";document.querySelectorAll("[data-disable]").forEach(function(b){b.onclick=async function(){if(confirm("Disable this profile?")){await api("/api/profiles/"+b.dataset.disable+"/disable",{method:"POST",body:"{}"});refresh()}}})}catch(e){$("profiles").textContent=e.message}}$("loginBtn").onclick=async function(){try{const r=await fetch("/api/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({password:$("password").value})});const b=await r.json();if(!r.ok)throw new Error(b.error||"Login failed");csrf=b.csrf;$("login").classList.add("hidden");$("app").classList.remove("hidden");refresh()}catch(e){$("loginMsg").textContent=e.message}};$("logoutBtn").onclick=async function(){await api("/api/logout",{method:"POST",body:"{}"});location.reload()};$("loadFile").onclick=function(){const f=$("file").files[0];if(!f)return;const reader=new FileReader();reader.onload=function(){$("payload").value=reader.result};reader.readAsText(f)};$("importBtn").onclick=async function(){try{const package=JSON.parse($("payload").value);const name=$("studentName").value.trim();const result=await api("/api/profiles/import",{method:"POST",body:JSON.stringify({name:name,package:package})});show("Queued "+result.public_id+"\\n"+result.page_url+"\\n"+result.wake_url+"\\nAlarm: "+result.alarm_label);refresh()}catch(e){show(e.message)}};</script></body></html>`;
 
 function profileView(row, origin, shortcutOrigin) {
@@ -464,7 +475,8 @@ async function workflowHealth(env) {
 }
 
 async function alarmAdminProfile(env, row, globalSettings) {
-  const override = await getPendingAlarmOverride(env, row.id);
+  const overrides = await getPendingAlarmOverrides(env, row.id);
+  const override = overrides[0] || null;
   const profile = await getProfileAlarmSettings(env, row.id);
   const effective = resolveAlarmSettings(globalSettings, profile.settings, row.public_id);
   return {
@@ -473,6 +485,7 @@ async function alarmAdminProfile(env, row, globalSettings) {
     name: row.name,
     active: Boolean(row.active),
     override: override ? { ...override, force: Boolean(override.force) } : null,
+    overrides: overrides.map((item) => ({ ...item, force: Boolean(item.force) })),
     settings: profile.settings,
     effective,
     updated_at: profile.updated_at,
@@ -510,7 +523,8 @@ async function alarmProfilePayload(env, profileId) {
   if (!row) return null;
   const global = await getGlobalAlarmSettings(env);
   const profile = await getProfileAlarmSettings(env, profileId);
-  const override = await getPendingAlarmOverride(env, profileId);
+  const overrides = await getPendingAlarmOverrides(env, profileId);
+  const override = overrides[0] || null;
   return {
     profile: { id: row.id, public_id: row.public_id, name: row.name, active: Boolean(row.active) },
     global: global.settings,
@@ -519,6 +533,7 @@ async function alarmProfilePayload(env, profileId) {
     settings_updated_at: profile.updated_at,
     effective: resolveAlarmSettings(global.settings, profile.settings, row.public_id),
     override: override ? { ...override, force: Boolean(override.force) } : null,
+    overrides: overrides.map((item) => ({ ...item, force: Boolean(item.force) })),
   };
 }
 
@@ -530,11 +545,9 @@ function overrideExpiry(targetDate) {
 
 function validTargetDate(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const parsed = new Date(`${value}T12:00:00+03:00`);
+  const parsed = new Date(`${value}T12:00:00Z`);
   if (Number.isNaN(parsed.getTime())) return false;
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(parsed);
-  const fields = Object.fromEntries(parts.filter((part) => ["year", "month", "day"].includes(part.type)).map((part) => [part.type, part.value]));
-  return `${fields.year}-${fields.month}-${fields.day}` === value;
+  return parsed.toISOString().slice(0, 10) === value;
 }
 function israelIsWeekendDate(targetDate) {
   if (!validTargetDate(targetDate)) return false;
@@ -545,6 +558,8 @@ async function nextPublicAlarmDate(env, publicId) {
   const payload = await fetchPublicWake(env, publicId);
   if (!payload) return null;
   const today = israelDateAndMinutes().date;
+  const previewTarget = typeof payload.next_alarm?.next_school_day === "string" ? payload.next_alarm.next_school_day : "";
+  if (validTargetDate(previewTarget) && previewTarget > today) return previewTarget;
   const nextScheduledDate = typeof payload.next_scheduled_school_day === "string" ? payload.next_scheduled_school_day : "";
   if (validTargetDate(nextScheduledDate) && nextScheduledDate > today) return nextScheduledDate;
   // Keep older published JSON safe during the Pages rollout: if it does not
@@ -555,31 +570,119 @@ async function nextPublicAlarmDate(env, publicId) {
 async function fetchPublicWake(env, publicId) {
   const origin = publicSiteURL(env);
   if (!origin) return null;
-  let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PUBLIC_WAKE_TIMEOUT_MS);
   try {
     const cacheBust = encodeURIComponent(crypto.randomUUID());
-    response = await fetch(`${origin}/students/${encodeURIComponent(publicId)}/wake.json?alarm-target=${cacheBust}`, {
+    const response = await fetch(`${origin}/students/${encodeURIComponent(publicId)}/wake.json?alarm-target=${cacheBust}`, {
       headers: { Accept: "application/json", "User-Agent": "shahaf-profile-alarm" },
+      signal: controller.signal,
     });
+    if (!response.ok) return null;
+    const payload = await response.json().catch(() => null);
+    if (validPublicWakeIdentity(payload, publicId) && (Boolean(payload.stale) || generatedAtAge(payload.generated_at) > PUBLIC_WAKE_MAX_AGE_MS)) {
+      return safeStalePublicWake(payload, publicId);
+    }
+    return validPublicWakePayload(payload, publicId) ? payload : null;
   } catch (_) {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
-  if (!response.ok) return null;
-  const payload = await response.json().catch(() => null);
-  return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
 }
-function applyPublicAlarmOverride(wake, override) {
+
+function generatedAtAge(value) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) ? Date.now() - timestamp : Number.POSITIVE_INFINITY;
+}
+
+function validFreshGeneratedAt(value) {
+  const age = generatedAtAge(value);
+  return age >= -PUBLIC_WAKE_FUTURE_TOLERANCE_MS && age <= PUBLIC_WAKE_MAX_AGE_MS;
+}
+
+function validPublicWakeIdentity(payload, publicId) {
+  const age = generatedAtAge(payload?.generated_at);
+  return Boolean(payload) && typeof payload === "object" && !Array.isArray(payload)
+    && String(payload.profile_id || "") === publicId
+    && Number.isFinite(age) && age >= -PUBLIC_WAKE_FUTURE_TOLERANCE_MS;
+}
+
+function safeStaleEnvelope(envelope, publicId, generatedAt) {
+  return {
+    ...(envelope && typeof envelope === "object" && !Array.isArray(envelope) ? envelope : {}),
+    profile_id: publicId,
+    generated_at: generatedAt,
+    next_school_day: null,
+    wake_time: null,
+    wake_at: null,
+    subject: null,
+    enabled: false,
+    stale: true,
+    shortcut_action: "leave",
+    fallback_status: "stale",
+  };
+}
+
+function safeStalePublicWake(payload, publicId) {
+  const result = safeStaleEnvelope(payload, publicId, payload.generated_at);
+  result.next_alarm = safeStaleEnvelope(payload.next_alarm, publicId, payload.generated_at);
+  result.alarm_control = { ...(payload.alarm_control || {}), override_active: false, override_pending: false };
+  result.next_alarm.alarm_control = { ...(payload.next_alarm?.alarm_control || {}), override_active: false, override_pending: false };
+  return result;
+}
+
+function validWakeTarget(envelope, publicId, { futureOnly = false, allowSafeEmpty = false } = {}) {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return false;
+  if (String(envelope.profile_id || "") !== publicId || !validFreshGeneratedAt(envelope.generated_at)) return false;
+  const action = String(envelope.shortcut_action || "");
+  if (!["set", "clear", "leave"].includes(action)) return false;
+  if (Boolean(envelope.stale) && action !== "leave") return false;
+  const targetDate = String(envelope.next_school_day || "");
+  if (!targetDate && allowSafeEmpty) {
+    return action !== "set" && (envelope.wake_at === null || envelope.wake_at === undefined);
+  }
+  const today = israelDateAndMinutes().date;
+  if (!validTargetDate(targetDate) || targetDate < today || (futureOnly && targetDate <= today)) return false;
+  if (action === "set" && israelIsWeekendDate(targetDate)) return false;
+  if (envelope.wake_at !== null && envelope.wake_at !== undefined) {
+    if (typeof envelope.wake_at !== "string" || !/(?:Z|[+-]\d{2}:\d{2})$/.test(envelope.wake_at)) return false;
+    const instant = new Date(envelope.wake_at);
+    if (Number.isNaN(instant.getTime()) || israelDateAndMinutes(instant).date !== targetDate) return false;
+  }
+  return true;
+}
+
+function validPublicWakePayload(payload, publicId) {
+  if (!validWakeTarget(payload, publicId, { allowSafeEmpty: true })) return false;
+  if (!validWakeTarget(payload.next_alarm, publicId, { futureOnly: true, allowSafeEmpty: true })) return false;
+  const baseline = payload.next_alarm.alarm_baseline;
+  if (!baseline || typeof baseline !== "object" || Array.isArray(baseline)) return false;
+  if (String(baseline.next_school_day || "") !== String(payload.next_alarm.next_school_day || "")) return false;
+  if (baseline.wake_at !== null && baseline.wake_at !== undefined) {
+    const instant = new Date(String(baseline.wake_at));
+    if (Number.isNaN(instant.getTime()) || israelDateAndMinutes(instant).date !== baseline.next_school_day) return false;
+  }
+  if (!payload.next_alarm.alarm_control || typeof payload.next_alarm.alarm_control !== "object" || Array.isArray(payload.next_alarm.alarm_control)) return false;
+  return true;
+}
+
+function overrideCoversWakeDate(override, wakeDate) {
+  const targetDate = String(override?.target_date || "");
+  const targetDateEnd = String(override?.target_date_end || "");
+  return validTargetDate(targetDate) && (targetDate === wakeDate || (validTargetDate(targetDateEnd) && targetDate <= wakeDate && wakeDate <= targetDateEnd));
+}
+
+function applySinglePublicAlarmOverride(wake, override) {
   if (!override) return wake;
   const targetDate = String(override.target_date || "");
-  const targetDateEnd = String(override.target_date_end || "");
   const action = String(override.action || "");
   const wakeDate = String(wake.next_school_day || "");
-  const coversWakeDate = validTargetDate(targetDate) && (
-    targetDate === wakeDate || (validTargetDate(targetDateEnd) && targetDate <= wakeDate && wakeDate <= targetDateEnd)
-  );
-  if (!coversWakeDate || !["clear", "set", "leave"].includes(action)) return wake;
+  if (!overrideCoversWakeDate(override, wakeDate) || !["clear", "set", "leave"].includes(action)) return wake;
+  if (action === "set" && israelIsWeekendDate(wakeDate)) return wake;
   const unsafeStatuses = new Set(["stale", "unavailable", "no-safe-route", "wake-time-bound"]);
-  if ((Boolean(wake.stale) || unsafeStatuses.has(String(wake.fallback_status || ""))) && !Boolean(override.force)) return wake;
+  if (Boolean(wake.stale)) return wake;
+  if (unsafeStatuses.has(String(wake.fallback_status || "")) && !Boolean(override.force)) return wake;
   const result = {
     ...wake,
     alarm_control: {
@@ -614,6 +717,7 @@ function applyPublicAlarmOverride(wake, override) {
       fallback_status: "manual-clear",
     };
   }
+  if (action === "leave") return { ...result, shortcut_action: "leave", fallback_status: "manual-leave" };
   const wakeAt = String(override.wake_at || "");
   const parsed = new Date(wakeAt);
   if (Number.isNaN(parsed.getTime())) return wake;
@@ -631,10 +735,60 @@ function applyPublicAlarmOverride(wake, override) {
   };
 }
 
-function createAlarmRestoreSnapshot(wake, targetDate) {
-  const baseline = wake?.alarm_baseline && typeof wake.alarm_baseline === "object" && !Array.isArray(wake.alarm_baseline)
+function safeRootAlarmForCurrentInstant(wake, currentInstant = new Date()) {
+  if (!wake || String(wake.shortcut_action || "") !== "set") return wake;
+  const today = israelDateAndMinutes(currentInstant).date;
+  if (israelIsWeekendDate(today)) {
+    return { ...wake, wake_time: null, wake_at: null, subject: null, enabled: false, shortcut_action: "clear", fallback_status: "current-weekend" };
+  }
+  const wakeAt = typeof wake.wake_at === "string" ? new Date(wake.wake_at) : null;
+  if (!wakeAt || Number.isNaN(wakeAt.getTime()) || wakeAt.getTime() <= currentInstant.getTime()) {
+    return { ...wake, shortcut_action: "leave", fallback_status: "elapsed-wake" };
+  }
+  return wake;
+}
+
+function applyPublicAlarmOverride(wake, overrideOrOverrides, currentInstant = new Date()) {
+  if (!wake || typeof wake !== "object" || Array.isArray(wake)) return wake;
+  const overrides = (Array.isArray(overrideOrOverrides) ? overrideOrOverrides : [overrideOrOverrides]).filter(Boolean);
+  const rootOverride = overrides.find((item) => overrideCoversWakeDate(item, String(wake.next_school_day || ""))) || null;
+  const nextOverride = wake.next_alarm
+    ? overrides.find((item) => overrideCoversWakeDate(item, String(wake.next_alarm.next_school_day || ""))) || null
+    : null;
+  const result = { ...safeRootAlarmForCurrentInstant(applySinglePublicAlarmOverride(wake, rootOverride), currentInstant) };
+  if (wake.next_alarm) result.next_alarm = applySinglePublicAlarmOverride(wake.next_alarm, nextOverride);
+  if (nextOverride && !rootOverride) {
+    result.alarm_control = {
+      ...(result.alarm_control && typeof result.alarm_control === "object" ? result.alarm_control : {}),
+      override_pending: true,
+    };
+  }
+  return result;
+}
+
+async function effectivePublicWake(env, row) {
+  const wake = await fetchPublicWake(env, row.public_id);
+  if (!wake) return null;
+  const overrides = await getPendingAlarmOverrides(env, row.id);
+  const reconcileEnvelope = (envelope) => {
+    if (!envelope?.alarm_control?.override_active) return envelope;
+    if (overrides.some((item) => overrideCoversWakeDate(item, String(envelope.next_school_day || "")))) return envelope;
+    return {
+      ...safeStaleEnvelope(envelope, row.public_id, envelope.generated_at || wake.generated_at),
+      fallback_status: "restore-reconcile",
+      alarm_control: { ...(envelope.alarm_control || {}), override_active: false, override_pending: false },
+    };
+  };
+  const reconciled = { ...reconcileEnvelope(wake) };
+  if (wake.next_alarm) reconciled.next_alarm = reconcileEnvelope(wake.next_alarm);
+  return applyPublicAlarmOverride(reconciled, overrides);
+}
+
+function createAlarmRestoreSnapshot(wake, targetDate, { requireExplicitBaseline = false } = {}) {
+  const explicitBaseline = wake?.alarm_baseline && typeof wake.alarm_baseline === "object" && !Array.isArray(wake.alarm_baseline)
     ? wake.alarm_baseline
-    : wake;
+    : null;
+  const baseline = explicitBaseline || (requireExplicitBaseline ? null : wake);
   if (!baseline || typeof baseline !== "object" || Array.isArray(baseline) || String(baseline.next_school_day || "") !== targetDate) return null;
   const snapshot = {};
   for (const key of ["next_school_day", "wake_time", "wake_at", "subject", "enabled", "shortcut_action", "fallback_status", "alarm_for_today", "stale"]) {
@@ -660,7 +814,11 @@ async function alarmRestoreSnapshot(env, publicId, targetDate, existingOverride 
   // New pages carry an alarm-only baseline alongside the effective payload.
   // This lets Restore recover legacy overrides whose restore_json was created
   // before snapshots existed, without trusting the already-overridden time.
-  return createAlarmRestoreSnapshot(await fetchPublicWake(env, publicId), targetDate);
+  const wake = await fetchPublicWake(env, publicId);
+  const targetWake = String(wake?.next_school_day || "") === targetDate ? wake
+    : String(wake?.next_alarm?.next_school_day || "") === targetDate ? wake.next_alarm
+      : null;
+  return createAlarmRestoreSnapshot(targetWake, targetDate, { requireExplicitBaseline: Boolean(existingOverride) });
 }
 
 function validateAlarmCommand(body) {
@@ -672,11 +830,39 @@ function validateAlarmCommand(body) {
   if (!ALARM_ACTIONS.has(action)) errors.push("action must be set, clear, or leave");
   if (!validTargetDate(targetDate)) errors.push("target_date must use YYYY-MM-DD");
   if (action === "set") {
-    if (typeof body?.wake_at !== "string" || Number.isNaN(Date.parse(body.wake_at))) errors.push("wake_at must be a valid ISO timestamp for set");
+    const wakeAt = typeof body?.wake_at === "string" ? body.wake_at : "";
+    const parsed = new Date(wakeAt);
+    if (!wakeAt || !/(?:Z|[+-]\d{2}:\d{2})$/.test(wakeAt) || Number.isNaN(parsed.getTime())) errors.push("wake_at must be a valid ISO timestamp with an explicit offset for set");
+    else if (validTargetDate(targetDate) && israelDateAndMinutes(parsed).date !== targetDate) errors.push("wake_at must fall on target_date in Israel");
+    if (validTargetDate(targetDate) && israelIsWeekendDate(targetDate)) errors.push("set commands cannot target Friday or Saturday");
     if (typeof body?.subject !== "undefined" && body.subject !== null && String(body.subject).length > 120) errors.push("subject is too long");
   }
   if (force && reason.length < 8) errors.push("a reason of at least 8 characters is required for a force action");
   return errors.length ? { errors } : { action, targetDate, force, reason, wakeAt: body?.wake_at || null, subject: body?.subject ? String(body.subject).slice(0, 120) : null };
+}
+
+async function persistAlarmOverride(env, override) {
+  const result = await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, restore_json) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11 WHERE ?12='' OR EXISTS(SELECT 1 FROM alarm_overrides WHERE id=?12 AND profile_id=?2 AND target_date=?3) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=excluded.subject, force=excluded.force, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, published_at=NULL, consumed_at=NULL, restore_json=COALESCE(alarm_overrides.restore_json, excluded.restore_json) WHERE alarm_overrides.id=?12")
+    .bind(
+      override.id,
+      override.profileId,
+      override.targetDate,
+      override.action,
+      override.wakeAt,
+      override.subject,
+      override.force ? 1 : 0,
+      override.reason,
+      override.createdAt,
+      override.expiresAt,
+      override.restoreJson,
+      override.expectedOverrideId || "",
+    ).run();
+  return Number(result.meta?.changes || 0) === 1;
+}
+
+function overrideVersionMatches(body, existingOverride) {
+  if (!Object.prototype.hasOwnProperty.call(body || {}, "override_id")) return true;
+  return String(body.override_id || "") === String(existingOverride?.id || "");
 }
 
 const dashboardHtml = `<!doctype html>
@@ -734,7 +920,7 @@ const alarmDashboardEnhancements = `<script>
   var hostId="alarm-control-center";
   var escapeHtml=function(value){return String(value==null?"":value).replace(/[&<>"']/g,function(ch){if(ch==="&")return "&amp;";if(ch==="<")return "&lt;";if(ch===">")return "&gt;";if(ch==="'")return "&#39;";return "&quot;"})};
   var csrfCookie=function(){return (document.cookie.split(";").map(function(part){return part.trim()}).find(function(part){return part.indexOf("shahaf_csrf=")===0})||"").slice("shahaf_csrf=".length)};
-  var api=async function(path,options){options=options||{};var headers=Object.assign({"content-type":"application/json","X-CSRF-Token":decodeURIComponent(csrfCookie())},options.headers||{});var response=await fetch(path,Object.assign({credentials:"include"},options,{headers:headers}));var body=await response.json().catch(function(){return {}});if(!response.ok)throw new Error(body.error||("HTTP "+response.status));return body};
+  var api=async function(path,options){options=options||{};if(typeof options.body==="string"){try{var requestBody=JSON.parse(options.body);if(requestBody&&requestBody.action==="set"&&requestBody.target_date&&requestBody.wake_at){var clock=String(requestBody.wake_at).match(/T(\d{2}:\d{2}):\d{2}/);if(clock)requestBody.wake_at=requestBody.target_date+"T"+clock[1]+":00"+israelOffsetForDate(requestBody.target_date);options=Object.assign({},options,{body:JSON.stringify(requestBody)})}}catch(_){}}var headers=Object.assign({"content-type":"application/json","X-CSRF-Token":decodeURIComponent(csrfCookie())},options.headers||{});var response=await fetch(path,Object.assign({credentials:"include"},options,{headers:headers}));var body=await response.json().catch(function(){return {}});if(!response.ok)throw new Error(body.error||("HTTP "+response.status));return body};
   var byId=function(id){return document.getElementById(id)};
   var toast=function(message,bad){var el=byId("toast");if(!el)return;el.textContent=message;el.className="toast"+(bad?" bad":"");clearTimeout(toast.timer);toast.timer=setTimeout(function(){el.className="toast hidden"},4200)};
   var formatDate=function(value){if(!value)return "—";var d=new Date(value);return isNaN(d.getTime())?String(value):d.toLocaleString([], {dateStyle:"medium",timeStyle:"short"})};
@@ -744,20 +930,21 @@ const alarmDashboardEnhancements = `<script>
   var select=function(label,id,value,options,extra){return '<div class="alarm-form-field '+(extra||"")+'"><label for="'+id+'">'+label+'</label><select id="'+id+'">'+options.map(function(option){return '<option value="'+escapeHtml(option[0])+'" '+(String(option[0])===String(value)?"selected":"")+'>'+escapeHtml(option[1])+'</option>'}).join("")+"</select></div>"};
   var checkbox=function(label,id,value){return '<div class="alarm-form-field wide"><label><input id="'+id+'" type="checkbox" '+(value?"checked":"")+'> '+label+'</label></div>'};
   var dateInput=function(value){return value||new Date().toISOString().slice(0,10)};
+  var israelOffsetForDate=function(date){var instant=new Date(date+"T12:00:00Z"),parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jerusalem",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"}).formatToParts(instant),fields={};parts.forEach(function(part){if(part.type!=="literal")fields[part.type]=part.value});var localAsUtc=Date.UTC(Number(fields.year),Number(fields.month)-1,Number(fields.day),Number(fields.hour),Number(fields.minute),Number(fields.second)),minutes=Math.round((localAsUtc-instant.getTime())/60000),sign=minutes<0?"-":"+",absolute=Math.abs(minutes);return sign+String(Math.floor(absolute/60)).padStart(2,"0")+":"+String(absolute%60).padStart(2,"0")};
   var model={data:null,audit:[]};
   var ensureHost=function(){css();var existing=byId(hostId);if(existing)return existing;var dashboard=byId("dashboard");if(!dashboard)return null;var workspace=dashboard.querySelector(".workspace");if(!workspace)return null;var host=document.createElement("section");host.id=hostId;host.className="panel alarm-control-panel";workspace.parentNode.insertBefore(host,workspace);return host};
   var globalHtml=function(settings){settings=settings||{};return '<div class="alarm-settings-card"><h3>Alarm defaults</h3><div class="alarm-form-grid">'+checkbox("Enable managed alarm synchronization","alarmGlobalEnabled",settings.enabled!==false)+field("Minutes before first class","alarmGlobalBuffer","number",valueOr(settings.wake_buffer_minutes,75))+field("Backup time","alarmGlobalFallback","time",valueOr(settings.fallback_wake_time,"07:15"))+field("Earliest wake time (optional)","alarmGlobalMin","time",settings.min_wake_time,"wide")+field("Latest wake time (optional)","alarmGlobalMax","time",settings.max_wake_time,"wide")+select("Rounding","alarmGlobalRound",valueOr(settings.round_to_minutes,1),[["1","No rounding"],["5","5 minutes"],["10","10 minutes"],["15","15 minutes"]])+select("If schedule is unavailable","alarmGlobalStale",valueOr(settings.stale_policy,"leave"),[["leave","Keep current alarm"],["set_fixed","Use backup time"]])+select("If there is no school","alarmGlobalNoLessons",valueOr(settings.no_lessons_policy,"clear"),[["clear","Clear this profile's alarm"],["leave","Keep current alarm"]])+field("Alarm name","alarmGlobalLabel","text",valueOr(settings.label_template,"Shahaf"),"wide")+field("Transit safety gap (minutes)","alarmGlobalTransitMargin","number",valueOr(settings.transit_min_arrival_margin,5))+field("Extra walking time (minutes)","alarmGlobalTransitWalk","number",valueOr(settings.transit_walk_buffer_minutes,0))+ '</div><p class="alarm-help">These settings apply only to added students. Ya‑1 and Ya‑2 are unchanged. Use <code>{public_id}</code> or <code>{profile_id}</code> in a label template if needed.</p><div class="alarm-actions"><button id="alarmSaveGlobal" class="button primary">Save</button><button id="alarmPreviewGlobal" class="button">Preview</button><button id="alarmRollbackGlobal" class="button">Undo last change</button></div><div id="alarmGlobalPreview" class="alarm-preview hidden"></div></div>'};
   var bulkHtml=function(){return '<div class="alarm-bulk-card"><h3>Change several alarms</h3><p class="alarm-help">Tick students below, choose what to do, and apply it.</p><div class="alarm-form-grid">'+select("Action","alarmBulkAction","pause",[["pause","Pause alarms"],["resume","Resume alarms"],["reset","Use defaults"],["set","Set alarm"],["clear","Clear alarm"],["leave","Keep as-is"]],"wide")+field("Date","alarmBulkDate","date",dateInput())+field("Wake time (only for Set alarm)","alarmBulkWake","time","07:15")+field("Why are you forcing this?","alarmBulkReason","text","","wide")+checkbox("Force this change (advanced)","alarmBulkForce",false)+'</div><div class="alarm-actions"><button id="alarmBulkPreview" class="button">Preview</button><button id="alarmBulkApply" class="button danger">Apply</button></div><div id="alarmBulkResult" class="alarm-preview hidden"></div></div>'};
   var liveText=function(live){if(!live||!live.available)return "Unavailable";if(live.stale)return "Stale";return live.wake_time||"Ready"};
-  var renderProfiles=function(profiles){return (profiles||[]).map(function(item){var live=item.live||{};var effective=item.effective||{};var override=item.override;var state=item.active?"Active":"Disabled";var overrideText=override?(override.action+" on "+override.target_date):"None";var routeIds=item.settings&&item.settings.transit_route_preference&&Array.isArray(item.settings.transit_route_preference.route_ids)?item.settings.transit_route_preference.route_ids.join(","):"";return '<article class="alarm-profile"><div class="alarm-profile-top"><label><input class="alarm-select" type="checkbox" value="'+escapeHtml(item.id)+'"> <span class="alarm-profile-name">'+escapeHtml(item.name)+'</span></label><span class="alarm-badge">'+state+'</span></div><div class="alarm-profile-id">'+escapeHtml(item.public_id)+'</div><div class="alarm-profile-summary"><div class="alarm-stat"><span>Wake time</span><strong>'+escapeHtml(liveText(live))+'</strong></div><div class="alarm-stat"><span>Action</span><strong>'+escapeHtml(live.available?(live.shortcut_action||"set"):"unknown")+'</strong></div><div class="alarm-stat"><span>Label</span><strong>'+escapeHtml(effective.alarm_label||"Shahaf")+'</strong></div><div class="alarm-stat"><span>One-time change</span><strong>'+escapeHtml(overrideText)+'</strong></div></div><details class="alarm-profile-details"><summary>Alarm settings</summary><div class="alarm-form-grid">'+checkbox("Alarm on","alarmEnabled_"+item.id,effective.enabled!==false)+field("Minutes before class (blank = default)","alarmBuffer_"+item.id,"number",valueOr(item.settings.wake_buffer_minutes,""))+field("Alarm name (blank = default)","alarmLabel_"+item.id,"text",valueOr(item.settings.alarm_label,""),"wide")+field("Earliest wake time (optional)","alarmMin_"+item.id,"time",valueOr(item.settings.min_wake_time,""))+field("Latest wake time (optional)","alarmMax_"+item.id,"time",valueOr(item.settings.max_wake_time,""))+select("Round wake time","alarmRound_"+item.id,valueOr(item.settings.round_to_minutes,""),[["","Use default"],["1","No rounding"],["5","5 minutes"],["10","10 minutes"],["15","15 minutes"]])+select("If schedule is missing","alarmStale_"+item.id,valueOr(item.settings.stale_policy,""),[["","Use default"],["leave","Keep current alarm"],["set_fixed","Use backup time"]])+select("If there is no school","alarmNoLessons_"+item.id,valueOr(item.settings.no_lessons_policy,""),[["","Use default"],["clear","Clear this profile"],["leave","Keep current alarm"]])+field("Transit safety gap (minutes)","alarmTransitMargin_"+item.id,"number",valueOr(item.settings.transit_min_arrival_margin,""))+field("Extra walking time (minutes)","alarmTransitWalk_"+item.id,"number",valueOr(item.settings.transit_walk_buffer_minutes,""))+field("Preferred route IDs (advanced)","alarmTransitRoutes_"+item.id,"text",routeIds,"wide")+'</div><div class="alarm-actions"><button class="button primary alarm-save-profile" data-id="'+escapeHtml(item.id)+'">Save</button><button class="button alarm-reset-profile" data-id="'+escapeHtml(item.id)+'">Use defaults</button><button class="button alarm-history-profile" data-id="'+escapeHtml(item.id)+'">History</button><button class="button alarm-rollback-profile" data-id="'+escapeHtml(item.id)+'">Undo</button></div><div class="alarm-form-grid">'+field("One-time change date","alarmCommandDate_"+item.id,"date",dateInput(override&&override.target_date))+select("One-time action","alarmCommandAction_"+item.id,"set",[["set","Set alarm"],["clear","Clear primary alarm"],["leave","Keep current alarm"]])+field("One-time wake time","alarmCommandWake_"+item.id,"time",override&&override.wake_at?new Date(override.wake_at).toTimeString().slice(0,5):"07:15")+field("Why are you forcing this?","alarmCommandReason_"+item.id,"text","","wide")+checkbox("Force this change (advanced)","alarmCommandForce_"+item.id,false)+'</div><div class="alarm-actions"><button class="button danger alarm-command-profile" data-id="'+escapeHtml(item.id)+'">Save one-time change</button></div><div id="alarmHistory_'+escapeHtml(item.id)+'" class="alarm-audit hidden"></div></details></article>'}).join("")||'<div class="empty">No managed profiles available.</div>'};
+  var renderProfiles=function(profiles){return (profiles||[]).map(function(item){var live=item.live||{};var effective=item.effective||{};var override=item.override;var state=item.active?"Active":"Disabled";var overrideText=override?(override.action+" on "+override.target_date):"None";var routeIds=item.settings&&item.settings.transit_route_preference&&Array.isArray(item.settings.transit_route_preference.route_ids)?item.settings.transit_route_preference.route_ids.join(","):"";return '<article class="alarm-profile"><div class="alarm-profile-top"><label><input class="alarm-select" type="checkbox" value="'+escapeHtml(item.id)+'"> <span class="alarm-profile-name">'+escapeHtml(item.name)+'</span></label><span class="alarm-badge">'+state+'</span></div><div class="alarm-profile-id">'+escapeHtml(item.public_id)+'</div><div class="alarm-profile-summary"><div class="alarm-stat"><span>Wake time</span><strong>'+escapeHtml(liveText(live))+'</strong></div><div class="alarm-stat"><span>Action</span><strong>'+escapeHtml(live.available?(live.shortcut_action||"set"):"unknown")+'</strong></div><div class="alarm-stat"><span>Label</span><strong>'+escapeHtml(effective.alarm_label||"Shahaf")+'</strong></div><div class="alarm-stat"><span>One-time change</span><strong>'+escapeHtml(overrideText)+'</strong></div></div><details class="alarm-profile-details"><summary>Alarm settings</summary><div class="alarm-form-grid">'+checkbox("Alarm on","alarmEnabled_"+item.id,effective.enabled!==false)+field("Minutes before class (blank = default)","alarmBuffer_"+item.id,"number",valueOr(item.settings.wake_buffer_minutes,""))+field("Alarm name (blank = default)","alarmLabel_"+item.id,"text",valueOr(item.settings.alarm_label,""),"wide")+field("Earliest wake time (optional)","alarmMin_"+item.id,"time",valueOr(item.settings.min_wake_time,""))+field("Latest wake time (optional)","alarmMax_"+item.id,"time",valueOr(item.settings.max_wake_time,""))+select("Round wake time","alarmRound_"+item.id,valueOr(item.settings.round_to_minutes,""),[["","Use default"],["1","No rounding"],["5","5 minutes"],["10","10 minutes"],["15","15 minutes"]])+select("If schedule is missing","alarmStale_"+item.id,valueOr(item.settings.stale_policy,""),[["","Use default"],["leave","Keep current alarm"],["set_fixed","Use backup time"]])+select("If there is no school","alarmNoLessons_"+item.id,valueOr(item.settings.no_lessons_policy,""),[["","Use default"],["clear","Clear this profile"],["leave","Keep current alarm"]])+field("Transit safety gap (minutes)","alarmTransitMargin_"+item.id,"number",valueOr(item.settings.transit_min_arrival_margin,""))+field("Extra walking time (minutes)","alarmTransitWalk_"+item.id,"number",valueOr(item.settings.transit_walk_buffer_minutes,""))+field("Preferred route IDs (advanced)","alarmTransitRoutes_"+item.id,"text",routeIds,"wide")+'</div><div class="alarm-actions"><button class="button primary alarm-save-profile" data-id="'+escapeHtml(item.id)+'">Save</button><button class="button alarm-reset-profile" data-id="'+escapeHtml(item.id)+'">Use defaults</button><button class="button alarm-history-profile" data-id="'+escapeHtml(item.id)+'">History</button><button class="button alarm-rollback-profile" data-id="'+escapeHtml(item.id)+'">Undo</button></div><div class="alarm-form-grid">'+field("One-time change date","alarmCommandDate_"+item.id,"date",dateInput(override&&override.target_date))+select("One-time action","alarmCommandAction_"+item.id,"set",[["set","Set alarm"],["clear","Clear primary alarm"],["leave","Keep current alarm"]])+field("One-time wake time","alarmCommandWake_"+item.id,"time",override&&override.wake_at?new Date(override.wake_at).toTimeString().slice(0,5):"07:15")+field("Why are you forcing this?","alarmCommandReason_"+item.id,"text","","wide")+checkbox("Force this change (advanced)","alarmCommandForce_"+item.id,false)+'</div><div class="alarm-actions"><button class="button danger alarm-command-profile" data-id="'+escapeHtml(item.id)+'" data-override="'+escapeHtml(override&&override.id||"")+'">Save one-time change</button></div><div id="alarmHistory_'+escapeHtml(item.id)+'" class="alarm-audit hidden"></div></details></article>'}).join("")||'<div class="empty">No managed profiles available.</div>'};
   var renderRouteSummary=function(profiles){document.querySelectorAll(".alarm-profile").forEach(function(card,index){var live=(profiles[index]||{}).live||{};if(!live.route_departure&&!live.route_arrival)return;var details=card.querySelector(".alarm-profile-details");if(!details)return;var summary=document.createElement("p");summary.className="alarm-route-summary";summary.textContent="Route: leave "+(live.route_departure||"—")+" · arrive "+(live.route_arrival||"—")+" · deadline "+(live.arrival_deadline||"—")+(live.route_preference_fallback?" · pinned route unavailable; automatic route used":"");details.insertBefore(summary,details.firstChild);var legs=(live.route||[]).map(function(leg){if(leg.type==="transit")return (leg.route||"Bus")+" "+(leg.departure||"")+"–"+(leg.arrival||"");if(leg.type==="walk")return "Walk "+(leg.minutes||0)+" min";return "Transfer"}).join(" · ");if(legs){var legLine=document.createElement("p");legLine.className="alarm-route-legs";legLine.textContent=legs;details.insertBefore(legLine,details.firstChild.nextSibling)}var alternatives=live.route_alternatives||[];if(alternatives.length){var altLine=document.createElement("p");altLine.className="alarm-route-alternatives";altLine.textContent="Earlier safe options: "+alternatives.map(function(item){return (item.route_departure||"—")+"→"+(item.route_arrival||"—")}).join(", ");details.insertBefore(altLine,details.firstChild.nextSibling)}})};
   var render=function(){var host=ensureHost();if(!host||!model.data)return;var alarm=model.data.alarm||{};host.innerHTML='<div class="alarm-head"><div><h2>Alarm control center</h2><p>Simple alarm settings for added students.</p></div><span class="alarm-badge">Applies on next Shortcut run</span></div><div class="alarm-grid">'+globalHtml(alarm.global||{})+bulkHtml()+'</div><div class="alarm-profiles"><h3>Per-profile controls</h3>'+renderProfiles(alarm.profiles||[])+'</div>';renderRouteSummary(alarm.profiles||[])};
   var settingsFromGlobal=function(){return {enabled:byId("alarmGlobalEnabled").checked,wake_buffer_minutes:Number(byId("alarmGlobalBuffer").value),fallback_wake_time:byId("alarmGlobalFallback").value,min_wake_time:byId("alarmGlobalMin").value||null,max_wake_time:byId("alarmGlobalMax").value||null,round_to_minutes:Number(byId("alarmGlobalRound").value),stale_policy:byId("alarmGlobalStale").value,no_lessons_policy:byId("alarmGlobalNoLessons").value,label_template:byId("alarmGlobalLabel").value,transit_min_arrival_margin:Number(byId("alarmGlobalTransitMargin").value),transit_walk_buffer_minutes:Number(byId("alarmGlobalTransitWalk").value)}};
   var settingsFromProfile=function(id){var nullable=function(value){return value===""?null:value};var routeText=byId("alarmTransitRoutes_"+id).value.trim();var routePreference=routeText?{route_ids:routeText.split(",").map(function(value){return value.trim()}).filter(Boolean)}:null;return {enabled:byId("alarmEnabled_"+id).checked,wake_buffer_minutes:nullable(byId("alarmBuffer_"+id).value)==null?null:Number(byId("alarmBuffer_"+id).value),alarm_label:nullable(byId("alarmLabel_"+id).value),min_wake_time:nullable(byId("alarmMin_"+id).value),max_wake_time:nullable(byId("alarmMax_"+id).value),round_to_minutes:nullable(byId("alarmRound_"+id).value)==null?null:Number(byId("alarmRound_"+id).value),stale_policy:nullable(byId("alarmStale_"+id).value),no_lessons_policy:nullable(byId("alarmNoLessons_"+id).value),transit_min_arrival_margin:nullable(byId("alarmTransitMargin_"+id).value)==null?null:Number(byId("alarmTransitMargin_"+id).value),transit_walk_buffer_minutes:nullable(byId("alarmTransitWalk_"+id).value)==null?null:Number(byId("alarmTransitWalk_"+id).value),transit_route_preference:routePreference}};
   var selected=function(){return Array.prototype.slice.call(document.querySelectorAll(".alarm-select:checked")).map(function(input){return input.value})};
   var confirmDanger=function(message,force){if(force)return window.confirm(message+"\\n\\nThis can intentionally bypass normal alarm safety. Continue?");return window.confirm(message)};
-  var bind=function(){var saveGlobal=byId("alarmSaveGlobal");if(saveGlobal)saveGlobal.onclick=async function(){try{saveGlobal.disabled=true;await api("/api/alarm-settings",{method:"PATCH",body:JSON.stringify({settings:settingsFromGlobal()})});toast("Global managed-profile defaults saved; publish queued");await load()}catch(error){toast(error.message,true)}finally{saveGlobal.disabled=false}};var previewGlobal=byId("alarmPreviewGlobal");if(previewGlobal)previewGlobal.onclick=function(){var box=byId("alarmGlobalPreview");box.textContent=JSON.stringify(settingsFromGlobal(),null,2);box.classList.remove("hidden")};var rollbackGlobal=byId("alarmRollbackGlobal");if(rollbackGlobal)rollbackGlobal.onclick=async function(){if(!confirmDanger("Rollback the most recent global settings version?"))return;try{await api("/api/alarm-settings/rollback",{method:"POST",body:"{}"});toast("Global settings rolled back; publish queued");await load()}catch(error){toast(error.message,true)}};var bulkPreview=byId("alarmBulkPreview");if(bulkPreview)bulkPreview.onclick=function(){var box=byId("alarmBulkResult");box.textContent="Selected profiles: "+selected().length+"\\nAction: "+byId("alarmBulkAction").value+"\\nTarget date: "+byId("alarmBulkDate").value;box.classList.remove("hidden")};var bulkApply=byId("alarmBulkApply");if(bulkApply)bulkApply.onclick=async function(){var ids=selected(),action=byId("alarmBulkAction").value,force=byId("alarmBulkForce").checked;if(!ids.length){toast("Select at least one profile",true);return}if(!confirmDanger("Apply "+action+" to "+ids.length+" managed profile(s)?",force))return;try{bulkApply.disabled=true;var body={profile_ids:ids,action:action,force:force,reason:byId("alarmBulkReason").value,target_date:byId("alarmBulkDate").value};if(action==="set")body.wake_at=byId("alarmBulkDate").value+"T"+byId("alarmBulkWake").value+":00+03:00";await api("/api/alarm-bulk",{method:"POST",body:JSON.stringify(body)});toast("Bulk action queued");await load()}catch(error){toast(error.message,true)}finally{bulkApply.disabled=false}};document.querySelectorAll(".alarm-save-profile").forEach(function(button){button.onclick=async function(){var id=button.dataset.id;try{button.disabled=true;await api("/api/profiles/"+encodeURIComponent(id)+"/alarm-settings",{method:"PATCH",body:JSON.stringify({settings:settingsFromProfile(id)})});toast("Profile alarm settings saved; publish queued");await load()}catch(error){toast(error.message,true)}finally{button.disabled=false}}});document.querySelectorAll(".alarm-reset-profile").forEach(function(button){button.onclick=async function(){if(!confirmDanger("Reset this profile to global defaults?"))return;try{await api("/api/profiles/"+encodeURIComponent(button.dataset.id)+"/alarm-settings/reset",{method:"POST",body:"{}"});toast("Profile reset; publish queued");await load()}catch(error){toast(error.message,true)}}});document.querySelectorAll(".alarm-history-profile").forEach(function(button){button.onclick=async function(){var box=byId("alarmHistory_"+button.dataset.id);try{var result=await api("/api/profiles/"+encodeURIComponent(button.dataset.id)+"/alarm-history");var rows=(result.audit||[]).map(function(row){return '<div class="alarm-audit-row"><strong>'+escapeHtml(row.action)+'</strong><br>'+escapeHtml(formatDate(row.created_at))+'<br>'+escapeHtml(JSON.stringify(row.details||{}))+'</div>'}).join("");box.innerHTML=rows||"No history yet";box.classList.remove("hidden")}catch(error){toast(error.message,true)}}});document.querySelectorAll(".alarm-rollback-profile").forEach(function(button){button.onclick=async function(){if(!confirmDanger("Rollback this profile’s last alarm settings version?"))return;try{await api("/api/profiles/"+encodeURIComponent(button.dataset.id)+"/alarm-settings/rollback",{method:"POST",body:"{}"});toast("Profile rolled back; publish queued");await load()}catch(error){toast(error.message,true)}}});document.querySelectorAll(".alarm-command-profile").forEach(function(button){button.onclick=async function(){var id=button.dataset.id,force=byId("alarmCommandForce_"+id).checked,action=byId("alarmCommandAction_"+id).value,date=byId("alarmCommandDate_"+id).value;if(!confirmDanger("Queue a one-time "+action+" command for "+date+"?",force))return;try{button.disabled=true;var body={action:action,target_date:date,force:force,reason:byId("alarmCommandReason_"+id).value};if(action==="set")body.wake_at=date+"T"+byId("alarmCommandWake_"+id).value+":00+03:00";await api("/api/profiles/"+encodeURIComponent(id)+"/alarm-command",{method:"POST",body:JSON.stringify(body)});toast("One-time alarm command queued");await load()}catch(error){toast(error.message,true)}finally{button.disabled=false}}})};
-  var installBulkPreview=function(){var button=byId("alarmBulkPreview");if(!button)return;button.onclick=async function(){var box=byId("alarmBulkResult"),ids=selected(),action=byId("alarmBulkAction").value;if(!ids.length){toast("Select at least one profile",true);return}try{button.disabled=true;var body={profile_ids:ids,action:action,target_date:byId("alarmBulkDate").value,force:byId("alarmBulkForce").checked,reason:byId("alarmBulkReason").value};if(action==="set")body.wake_at=byId("alarmBulkDate").value+"T"+byId("alarmBulkWake").value+":00+03:00";var result=await api("/api/alarm-preview",{method:"POST",body:JSON.stringify(body)});box.textContent=JSON.stringify(result.preview,null,2);box.classList.remove("hidden")}catch(error){toast(error.message,true)}finally{button.disabled=false}}};
+  var bind=function(){var saveGlobal=byId("alarmSaveGlobal");if(saveGlobal)saveGlobal.onclick=async function(){try{saveGlobal.disabled=true;await api("/api/alarm-settings",{method:"PATCH",body:JSON.stringify({settings:settingsFromGlobal()})});toast("Global managed-profile defaults saved; publish queued");await load()}catch(error){toast(error.message,true)}finally{saveGlobal.disabled=false}};var previewGlobal=byId("alarmPreviewGlobal");if(previewGlobal)previewGlobal.onclick=function(){var box=byId("alarmGlobalPreview");box.textContent=JSON.stringify(settingsFromGlobal(),null,2);box.classList.remove("hidden")};var rollbackGlobal=byId("alarmRollbackGlobal");if(rollbackGlobal)rollbackGlobal.onclick=async function(){if(!confirmDanger("Rollback the most recent global settings version?"))return;try{await api("/api/alarm-settings/rollback",{method:"POST",body:"{}"});toast("Global settings rolled back; publish queued");await load()}catch(error){toast(error.message,true)}};var bulkPreview=byId("alarmBulkPreview");if(bulkPreview)bulkPreview.onclick=function(){var box=byId("alarmBulkResult");box.textContent="Selected profiles: "+selected().length+"\\nAction: "+byId("alarmBulkAction").value+"\\nTarget date: "+byId("alarmBulkDate").value;box.classList.remove("hidden")};var bulkApply=byId("alarmBulkApply");if(bulkApply)bulkApply.onclick=async function(){var ids=selected(),action=byId("alarmBulkAction").value,force=byId("alarmBulkForce").checked;if(!ids.length){toast("Select at least one profile",true);return}if(!confirmDanger("Apply "+action+" to "+ids.length+" managed profile(s)?",force))return;try{bulkApply.disabled=true;var body={profile_ids:ids,action:action,force:force,reason:byId("alarmBulkReason").value,target_date:byId("alarmBulkDate").value};if(action==="set")body.wake_at=byId("alarmBulkDate").value+"T"+byId("alarmBulkWake").value+":00"+israelOffsetForDate(byId("alarmBulkDate").value);await api("/api/alarm-bulk",{method:"POST",body:JSON.stringify(body)});toast("Bulk action queued");await load()}catch(error){toast(error.message,true)}finally{bulkApply.disabled=false}};document.querySelectorAll(".alarm-save-profile").forEach(function(button){button.onclick=async function(){var id=button.dataset.id;try{button.disabled=true;await api("/api/profiles/"+encodeURIComponent(id)+"/alarm-settings",{method:"PATCH",body:JSON.stringify({settings:settingsFromProfile(id)})});toast("Profile alarm settings saved; publish queued");await load()}catch(error){toast(error.message,true)}finally{button.disabled=false}}});document.querySelectorAll(".alarm-reset-profile").forEach(function(button){button.onclick=async function(){if(!confirmDanger("Reset this profile to global defaults?"))return;try{await api("/api/profiles/"+encodeURIComponent(button.dataset.id)+"/alarm-settings/reset",{method:"POST",body:"{}"});toast("Profile reset; publish queued");await load()}catch(error){toast(error.message,true)}}});document.querySelectorAll(".alarm-history-profile").forEach(function(button){button.onclick=async function(){var box=byId("alarmHistory_"+button.dataset.id);try{var result=await api("/api/profiles/"+encodeURIComponent(button.dataset.id)+"/alarm-history");var rows=(result.audit||[]).map(function(row){return '<div class="alarm-audit-row"><strong>'+escapeHtml(row.action)+'</strong><br>'+escapeHtml(formatDate(row.created_at))+'<br>'+escapeHtml(JSON.stringify(row.details||{}))+'</div>'}).join("");box.innerHTML=rows||"No history yet";box.classList.remove("hidden")}catch(error){toast(error.message,true)}}});document.querySelectorAll(".alarm-rollback-profile").forEach(function(button){button.onclick=async function(){if(!confirmDanger("Rollback this profile’s last alarm settings version?"))return;try{await api("/api/profiles/"+encodeURIComponent(button.dataset.id)+"/alarm-settings/rollback",{method:"POST",body:"{}"});toast("Profile rolled back; publish queued");await load()}catch(error){toast(error.message,true)}}});document.querySelectorAll(".alarm-command-profile").forEach(function(button){button.onclick=async function(){var id=button.dataset.id,force=byId("alarmCommandForce_"+id).checked,action=byId("alarmCommandAction_"+id).value,date=byId("alarmCommandDate_"+id).value;if(!confirmDanger("Queue a one-time "+action+" command for "+date+"?",force))return;try{button.disabled=true;var body={action:action,target_date:date,force:force,reason:byId("alarmCommandReason_"+id).value,override_id:button.dataset.override||""};if(action==="set")body.wake_at=date+"T"+byId("alarmCommandWake_"+id).value+":00"+israelOffsetForDate(date);await api("/api/profiles/"+encodeURIComponent(id)+"/alarm-command",{method:"POST",body:JSON.stringify(body)});toast("One-time alarm command queued");await load()}catch(error){toast(error.message,true)}finally{button.disabled=false}}})};
+  var installBulkPreview=function(){var button=byId("alarmBulkPreview");if(!button)return;button.onclick=async function(){var box=byId("alarmBulkResult"),ids=selected(),action=byId("alarmBulkAction").value;if(!ids.length){toast("Select at least one profile",true);return}try{button.disabled=true;var body={profile_ids:ids,action:action,target_date:byId("alarmBulkDate").value,force:byId("alarmBulkForce").checked,reason:byId("alarmBulkReason").value};if(action==="set")body.wake_at=byId("alarmBulkDate").value+"T"+byId("alarmBulkWake").value+":00"+israelOffsetForDate(byId("alarmBulkDate").value);var result=await api("/api/alarm-preview",{method:"POST",body:JSON.stringify(body)});box.textContent=JSON.stringify(result.preview,null,2);box.classList.remove("hidden")}catch(error){toast(error.message,true)}finally{button.disabled=false}}};
   var installHistoryRestore=function(){document.querySelectorAll(".alarm-history-profile").forEach(function(button){button.onclick=async function(){var id=button.dataset.id,box=byId("alarmHistory_"+id);try{var result=await api("/api/profiles/"+encodeURIComponent(id)+"/alarm-history"),versions=(result.history||[]).map(function(row){return '<div class="alarm-audit-row"><strong>Settings version</strong><br>'+escapeHtml(formatDate(row.created_at))+'<br><button class="button alarm-restore-history" data-profile="'+escapeHtml(id)+'" data-history="'+escapeHtml(row.id)+'">Restore this version</button></div>'}).join(""),audit=(result.audit||[]).map(function(row){return '<div class="alarm-audit-row"><strong>'+escapeHtml(row.action)+'</strong><br>'+escapeHtml(formatDate(row.created_at))+'<br>'+escapeHtml(JSON.stringify(row.details||{}))+'</div>'}).join("");box.innerHTML=(versions||"No saved settings versions")+(audit?'<div class="alarm-help">Audit log</div>'+audit:"");box.classList.remove("hidden");box.querySelectorAll(".alarm-restore-history").forEach(function(restore){restore.onclick=async function(){if(!confirmDanger("Restore this saved settings version?"))return;try{await api("/api/profiles/"+encodeURIComponent(restore.dataset.profile)+"/alarm-settings/rollback",{method:"POST",body:JSON.stringify({history_id:restore.dataset.history})});toast("Saved settings version restored; publish queued");await load()}catch(error){toast(error.message,true)}}})}catch(error){toast(error.message,true)}}})};
   var originalBind=bind;bind=function(){originalBind();installBulkPreview();installHistoryRestore()};
   var simplifyControls=function(){var moveToMore=function(grid,ids,title){if(!grid||grid.dataset.simple)return;var nodes=ids.map(function(id){var input=byId(id);return input&&input.closest(".alarm-form-field")}).filter(Boolean);if(!nodes.length)return;var details=document.createElement("details");details.className="alarm-advanced";var summary=document.createElement("summary");summary.textContent=title;details.appendChild(summary);var inner=document.createElement("div");inner.className="alarm-form-grid";nodes.forEach(function(node){inner.appendChild(node)});details.appendChild(inner);grid.parentNode.insertBefore(details,grid.nextSibling);grid.dataset.simple="1"};moveToMore(byId("alarmGlobalEnabled")&&byId("alarmGlobalEnabled").closest(".alarm-form-grid"),["alarmGlobalFallback","alarmGlobalMin","alarmGlobalMax","alarmGlobalRound","alarmGlobalLabel","alarmGlobalTransitMargin","alarmGlobalTransitWalk"],"More settings");moveToMore(byId("alarmBulkAction")&&byId("alarmBulkAction").closest(".alarm-form-grid"),["alarmBulkReason","alarmBulkForce"],"More options")};
@@ -799,6 +986,7 @@ export default {
           package: JSON.parse(row.package_json),
           alarm_settings: profileAlarm.effective,
           alarm_override: profileAlarm.override,
+          alarm_overrides: profileAlarm.overrides,
         };
       }));
       return json({ profiles });
@@ -818,18 +1006,23 @@ export default {
     }
     const publicWakeEndpoint = url.pathname.match(/^\/public\/profiles\/([^/]+)\/wake\.json$/);
     if (publicWakeEndpoint) {
-      if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+      const cors = publicCorsHeaders(request, env);
+      const requestOrigin = request.headers.get("Origin");
+      if (request.method === "OPTIONS") return publicOriginOK(request, env)
+        ? new Response(null, { status: 204, headers: cors })
+        : json({ error: "origin rejected" }, 403);
+      if (request.method !== "GET") return json({ error: "method not allowed" }, 405, cors);
+      if (requestOrigin && !publicOriginOK(request, env)) return json({ error: "origin rejected" }, 403);
       let publicId = "";
-      try { publicId = decodeURIComponent(publicWakeEndpoint[1]); } catch (_) { return json({ error: "invalid profile" }, 400); }
-      if (!/^[A-Za-z0-9_-]{8,80}$/.test(publicId)) return json({ error: "invalid profile" }, 400);
+      try { publicId = decodeURIComponent(publicWakeEndpoint[1]); } catch (_) { return json({ error: "invalid profile" }, 400, cors); }
+      if (!/^[A-Za-z0-9_-]{8,80}$/.test(publicId)) return json({ error: "invalid profile" }, 400, cors);
       const requestKey = await hash(`${request.headers.get("CF-Connecting-IP") || "unknown"}:${publicId}`);
-      if (!(await rateLimit(env, `public-alarm-feed:${requestKey}`, 60, 3600))) return json({ error: "alarm feed rate limit reached" }, 429);
+      if (!(await rateLimit(env, `public-alarm-feed:${requestKey}`, 60, 3600))) return json({ error: "alarm feed rate limit reached" }, 429, cors);
       const row = await env.DB.prepare("SELECT id, public_id FROM profiles WHERE public_id=?1 AND active=1").bind(publicId).first();
-      if (!row) return json({ error: "profile not found" }, 404);
-      const wake = await fetchPublicWake(env, publicId);
-      if (!wake) return json({ error: "alarm data is temporarily unavailable" }, 503, { "cache-control": "no-store" });
-      const override = await getPendingAlarmOverride(env, row.id);
-      return json(applyPublicAlarmOverride(wake, override), 200, { "cache-control": "no-store" });
+      if (!row) return json({ error: "profile not found" }, 404, cors);
+      const wake = await effectivePublicWake(env, row);
+      if (!wake) return json({ error: "alarm data is temporarily unavailable" }, 503, { ...cors, "cache-control": "no-store" });
+      return json(wake, 200, { ...cors, "cache-control": "no-store" });
     }
     const publicAlarmCommand = url.pathname.match(/^\/public\/profiles\/([^/]+)\/alarm-command$/);
     if (publicAlarmCommand) {
@@ -851,29 +1044,32 @@ export default {
       const targetDate = await nextPublicAlarmDate(env, publicId);
       if (!targetDate) return json({ error: "No upcoming alarm is available right now." }, 503, cors);
       const existingOverride = await getAlarmOverrideForTarget(env, row.id, targetDate);
+      if (!overrideVersionMatches(body, existingOverride)) return json({ error: "alarm command changed; refresh and try again" }, 409, cors);
       if (action === "restore") {
         if (!existingOverride) return json({ error: "There is no active alarm change to restore." }, 409, cors);
+        if (israelIsWeekendDate(today.date) || israelIsWeekendDate(targetDate)) return json({ error: "Alarms cannot be restored through the fast feed on Friday or Saturday." }, 400, cors);
         const restoreJson = await alarmRestoreSnapshot(env, publicId, targetDate, existingOverride);
         const restoreSnapshot = normalizedAlarmRestoreSnapshot(restoreJson, targetDate);
         const timestamp = now();
         if (restoreSnapshot) {
           const restoreAction = "set";
           const restoreWakeAt = String(restoreSnapshot.wake_at);
-          await env.DB.prepare("UPDATE alarm_overrides SET action=?1, wake_at=?2, subject=?3, force=0, reason=?4, created_at=?5, expires_at=?6, published_at=NULL, consumed_at=NULL, restore_json=?7 WHERE id=?8 AND profile_id=?9")
-            .bind(restoreAction, restoreWakeAt, restoreSnapshot.subject ? String(restoreSnapshot.subject).slice(0, 120) : null, "Student restored the correct original alarm time", timestamp, overrideExpiry(targetDate), JSON.stringify(restoreSnapshot), existingOverride.id, row.id).run();
+          const result = await env.DB.prepare("UPDATE alarm_overrides SET id=?1, action=?2, wake_at=?3, subject=?4, force=0, reason=?5, created_at=?6, expires_at=?7, published_at=NULL, consumed_at=NULL, restore_json=?8 WHERE id=?9 AND profile_id=?10 AND consumed_at IS NULL")
+            .bind(crypto.randomUUID(), restoreAction, restoreWakeAt, restoreSnapshot.subject ? String(restoreSnapshot.subject).slice(0, 120) : null, "Student restored the correct original alarm time", timestamp, overrideExpiry(targetDate), JSON.stringify(restoreSnapshot), existingOverride.id, row.id).run();
+          if (Number(result.meta?.changes || 0) !== 1) return json({ error: "alarm command changed; refresh and try again" }, 409, cors);
         } else {
-          await env.DB.prepare("DELETE FROM alarm_overrides WHERE id=?1 AND profile_id=?2 AND consumed_at IS NULL").bind(existingOverride.id, row.id).run();
+          const result = await env.DB.prepare("DELETE FROM alarm_overrides WHERE id=?1 AND profile_id=?2 AND consumed_at IS NULL").bind(existingOverride.id, row.id).run();
+          if (Number(result.meta?.changes || 0) !== 1) return json({ error: "alarm command changed; refresh and try again" }, 409, cors);
         }
         await writeAudit(env, row.id, "alarm-command-restore", { target_date: targetDate, immediate: Boolean(restoreSnapshot), mode: "correct-original-time", source: "public-profile" }, "student");
-        try { await triggerPublish(env, row.id); } catch (_) {
-          return json({ error: "Your restore request was saved, but publishing is temporarily unavailable." }, 503, cors);
-        }
-        return json({ status: "queued", action, target_date: targetDate, wake_time: restoreSnapshot?.wake_time || null, immediate: Boolean(restoreSnapshot) }, 202, { ...cors, "cache-control": "no-store" });
+        let publishStatus = "queued";
+        try { await triggerPublish(env, row.id); } catch (_) { publishStatus = "failed"; }
+        return json({ status: "accepted", publish_status: publishStatus, action, target_date: targetDate, wake_time: restoreSnapshot?.wake_time || null, immediate: Boolean(restoreSnapshot), wake: await effectivePublicWake(env, row) }, 202, { ...cors, "cache-control": "no-store" });
       }
       let wakeAt = null;
       let wakeTime = null;
       if (action === "set") {
-        if (israelIsWeekendDate(targetDate)) return json({ error: "The next alarm date cannot be Friday or Saturday." }, 400, cors);
+        if (israelIsWeekendDate(today.date) || israelIsWeekendDate(targetDate)) return json({ error: "Alarms cannot be set through the fast feed on Friday or Saturday." }, 400, cors);
         wakeTime = String(body?.wake_time || "");
         if (!validClock(wakeTime, false)) return json({ error: "wake_time must use HH:MM" }, 400, cors);
         if (targetDate === today.date && Number(wakeTime.slice(0, 2)) * 60 + Number(wakeTime.slice(3)) <= today.minutes) {
@@ -884,13 +1080,16 @@ export default {
       const timestamp = now();
       const id = crypto.randomUUID();
       const restoreJson = await alarmRestoreSnapshot(env, publicId, targetDate, existingOverride);
-      await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, restore_json) VALUES(?1, ?2, ?3, ?4, ?5, NULL, 0, ?6, ?7, ?8, ?9) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=NULL, force=0, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, published_at=NULL, consumed_at=NULL, restore_json=excluded.restore_json")
-        .bind(id, row.id, targetDate, action, wakeAt, "Student self-service alarm change", timestamp, overrideExpiry(targetDate), restoreJson).run();
+      const saved = await persistAlarmOverride(env, {
+        id, profileId: row.id, targetDate, action, wakeAt, subject: null, force: false,
+        reason: "Student self-service alarm change", createdAt: timestamp, expiresAt: overrideExpiry(targetDate), restoreJson,
+        expectedOverrideId: existingOverride?.id || "",
+      });
+      if (!saved) return json({ error: "alarm command changed; refresh and try again" }, 409, cors);
       await writeAudit(env, row.id, `alarm-command-${action}`, { target_date: targetDate, wake_time: wakeTime, source: "public-profile" }, "student");
-      try { await triggerPublish(env, row.id); } catch (_) {
-        return json({ error: "Your alarm change was saved, but publishing is temporarily unavailable." }, 503, cors);
-      }
-      return json({ status: "queued", action, target_date: targetDate, wake_time: wakeTime }, 202, { ...cors, "cache-control": "no-store" });
+      let publishStatus = "queued";
+      try { await triggerPublish(env, row.id); } catch (_) { publishStatus = "failed"; }
+      return json({ status: "accepted", publish_status: publishStatus, action, target_date: targetDate, wake_time: wakeTime, wake: await effectivePublicWake(env, row) }, 202, { ...cors, "cache-control": "no-store" });
     }
     const check = await auth(request, env, csrfRequired(request)); if (check.error) return check.error;
     if (url.pathname === "/api/classes" && request.method === "GET") {
@@ -924,8 +1123,8 @@ export default {
       await saveSettingsHistory(env, "global", null, current.settings);
       await env.DB.prepare("UPDATE alarm_global_settings SET settings_json=?1, updated_at=?2, updated_by='admin' WHERE id=1").bind(JSON.stringify(checked.settings), now()).run();
       await writeAudit(env, null, "global-settings-updated", { settings: checked.settings });
-      try { await triggerPublish(env, "global-alarm-settings-updated"); } catch (error) { return json({ error: `Global settings saved but publish failed: ${error.message}` }, 502); }
-      return json({ settings: checked.settings, status: "queued" });
+      const publish = await publishStatus(env, "global-alarm-settings-updated");
+      return json({ settings: checked.settings, status: "accepted", publish_status: publish });
     }
     if (url.pathname === "/api/alarm-settings/rollback" && request.method === "POST") {
       if (!(await rateLimit(env, `alarm-settings:${await hash(cookie(request, "__Host-shahaf_session"))}`, 20, 3600))) return json({ error: "alarm settings rate limit reached" }, 429);
@@ -940,8 +1139,8 @@ export default {
       await saveSettingsHistory(env, "global", null, current.settings);
       await env.DB.prepare("UPDATE alarm_global_settings SET settings_json=?1, updated_at=?2, updated_by='admin' WHERE id=1").bind(JSON.stringify(checked.settings), now()).run();
       await writeAudit(env, null, "global-settings-rollback", { history_id: history.id });
-      try { await triggerPublish(env, "global-alarm-settings-rollback"); } catch (error) { return json({ error: `Global settings rolled back but publish failed: ${error.message}` }, 502); }
-      return json({ settings: checked.settings, status: "rolled_back" });
+      const publish = await publishStatus(env, "global-alarm-settings-rollback");
+      return json({ settings: checked.settings, status: "rolled_back", publish_status: publish });
     }
     if (url.pathname === "/api/alarm-audit" && request.method === "GET") {
       const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 100), 1), 200);
@@ -1003,8 +1202,8 @@ export default {
       await saveSettingsHistory(env, "profile", row.id, current.settings);
       await env.DB.prepare("INSERT INTO alarm_profile_settings(profile_id, settings_json, updated_at, updated_by) VALUES(?1, ?2, ?3, 'admin') ON CONFLICT(profile_id) DO UPDATE SET settings_json=excluded.settings_json, updated_at=excluded.updated_at, updated_by='admin'").bind(row.id, JSON.stringify(next), now()).run();
       await writeAudit(env, row.id, "profile-settings-updated", { settings: checked.settings });
-      try { await triggerPublish(env, row.id); } catch (error) { return json({ error: `Settings saved but publish failed: ${error.message}` }, 502); }
-      return json({ ...(await alarmProfilePayload(env, row.id)), status: "queued" });
+      const publish = await publishStatus(env, row.id);
+      return json({ ...(await alarmProfilePayload(env, row.id)), status: "accepted", publish_status: publish });
     }
     const alarmProfileReset = url.pathname.match(/^\/api\/profiles\/([^/]+)\/alarm-settings\/reset$/);
     if (alarmProfileReset && request.method === "POST") {
@@ -1015,8 +1214,8 @@ export default {
       await saveSettingsHistory(env, "profile", row.id, current.settings);
       await env.DB.prepare("DELETE FROM alarm_profile_settings WHERE profile_id=?1").bind(row.id).run();
       await writeAudit(env, row.id, "profile-settings-reset", {});
-      try { await triggerPublish(env, row.id); } catch (error) { return json({ error: `Settings reset but publish failed: ${error.message}` }, 502); }
-      return json({ ...(await alarmProfilePayload(env, row.id)), status: "queued" });
+      const publish = await publishStatus(env, row.id);
+      return json({ ...(await alarmProfilePayload(env, row.id)), status: "accepted", publish_status: publish });
     }
     const alarmProfileRollback = url.pathname.match(/^\/api\/profiles\/([^/]+)\/alarm-settings\/rollback$/);
     if (alarmProfileRollback && request.method === "POST") {
@@ -1034,8 +1233,8 @@ export default {
       await saveSettingsHistory(env, "profile", row.id, current.settings);
       await env.DB.prepare("INSERT INTO alarm_profile_settings(profile_id, settings_json, updated_at, updated_by) VALUES(?1, ?2, ?3, 'admin') ON CONFLICT(profile_id) DO UPDATE SET settings_json=excluded.settings_json, updated_at=excluded.updated_at, updated_by='admin'").bind(row.id, JSON.stringify(checked.settings), now()).run();
       await writeAudit(env, row.id, "profile-settings-rollback", { history_id: history.id });
-      try { await triggerPublish(env, row.id); } catch (error) { return json({ error: `Settings rolled back but publish failed: ${error.message}` }, 502); }
-      return json({ ...(await alarmProfilePayload(env, row.id)), status: "queued" });
+      const publish = await publishStatus(env, row.id);
+      return json({ ...(await alarmProfilePayload(env, row.id)), status: "rolled_back", publish_status: publish });
     }
     const alarmCommand = url.pathname.match(/^\/api\/profiles\/([^/]+)\/alarm-command$/);
     if (alarmCommand && request.method === "POST") {
@@ -1048,12 +1247,18 @@ export default {
       const timestamp = now();
       const id = crypto.randomUUID();
       const existingOverride = await getAlarmOverrideForTarget(env, row.id, command.targetDate);
+      if (!overrideVersionMatches(body, existingOverride)) return json({ error: "alarm command changed; refresh and try again" }, 409);
       const restoreJson = await alarmRestoreSnapshot(env, row.public_id, command.targetDate, existingOverride);
-      await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, restore_json) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=excluded.subject, force=excluded.force, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, restore_json=excluded.restore_json, consumed_at=NULL")
-        .bind(id, row.id, command.targetDate, command.action, command.wakeAt, command.subject, command.force ? 1 : 0, command.reason, timestamp, overrideExpiry(command.targetDate), restoreJson).run();
+      const saved = await persistAlarmOverride(env, {
+        id, profileId: row.id, targetDate: command.targetDate, action: command.action, wakeAt: command.wakeAt,
+        subject: command.subject, force: command.force, reason: command.reason, createdAt: timestamp,
+        expiresAt: overrideExpiry(command.targetDate), restoreJson, expectedOverrideId: existingOverride?.id || "",
+      });
+      if (!saved) return json({ error: "alarm command changed; refresh and try again" }, 409);
       await writeAudit(env, row.id, `alarm-command-${command.action}`, { target_date: command.targetDate, force: command.force, reason: command.reason });
-      try { await triggerPublish(env, row.id); } catch (error) { return json({ error: `Command saved but publish failed: ${error.message}` }, 502); }
-      return json({ ...(await alarmProfilePayload(env, row.id)), status: "queued", command_id: id });
+      let publishStatus = "queued";
+      try { await triggerPublish(env, row.id); } catch (_) { publishStatus = "failed"; }
+      return json({ ...(await alarmProfilePayload(env, row.id)), status: "accepted", publish_status: publishStatus, command_id: id });
     }
     const alarmHistory = url.pathname.match(/^\/api\/profiles\/([^/]+)\/alarm-history$/);
     if (alarmHistory && request.method === "GET") {
@@ -1090,12 +1295,18 @@ export default {
           const id = crypto.randomUUID();
           const existingOverride = await getAlarmOverrideForTarget(env, row.id, command.targetDate);
           const restoreJson = await alarmRestoreSnapshot(env, row.public_id, command.targetDate, existingOverride);
-          await env.DB.prepare("INSERT INTO alarm_overrides(id, profile_id, target_date, action, wake_at, subject, force, reason, created_at, expires_at, restore_json) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(profile_id, target_date) DO UPDATE SET id=excluded.id, action=excluded.action, wake_at=excluded.wake_at, subject=excluded.subject, force=excluded.force, reason=excluded.reason, created_at=excluded.created_at, expires_at=excluded.expires_at, restore_json=excluded.restore_json, consumed_at=NULL").bind(id, row.id, command.targetDate, command.action, command.wakeAt, command.subject, command.force ? 1 : 0, command.reason, timestamp, overrideExpiry(command.targetDate), restoreJson).run();
+          const saved = await persistAlarmOverride(env, {
+            id, profileId: row.id, targetDate: command.targetDate, action: command.action, wakeAt: command.wakeAt,
+            subject: command.subject, force: command.force, reason: command.reason, createdAt: timestamp,
+            expiresAt: overrideExpiry(command.targetDate), restoreJson, expectedOverrideId: existingOverride?.id || "",
+          });
+          if (!saved) return json({ error: `alarm command changed for ${row.public_id}; refresh and try again` }, 409);
         }
         await writeAudit(env, row.id, `bulk-${action}`, { target_date: command?.targetDate || null, force: command?.force || false, reason: command?.reason || "" });
       }
-      try { await triggerPublish(env, "bulk-managed-profiles"); } catch (error) { return json({ error: `Bulk action saved but publish failed: ${error.message}` }, 502); }
-      return json({ status: "queued", affected: rows.length });
+      let publishStatus = "queued";
+      try { await triggerPublish(env, "bulk-managed-profiles"); } catch (_) { publishStatus = "failed"; }
+      return json({ status: "accepted", publish_status: publishStatus, affected: rows.length });
     }
     if (url.pathname === "/api/profiles" && request.method === "GET") {
       const rows = await env.DB.prepare("SELECT id, public_id, name, package_json, active, created_at, updated_at, last_publish_status, last_publish_url FROM profiles ORDER BY created_at DESC").all();
@@ -1123,8 +1334,9 @@ export default {
       const existing = await env.DB.prepare("SELECT id, public_id FROM profiles WHERE name=?1").bind(name).first();
       const id = existing?.id || crypto.randomUUID(); const publicId = existing?.public_id || randomToken(16); const timestamp = now();
       await env.DB.prepare("INSERT INTO profiles(id, public_id, name, package_json, active, created_at, updated_at, last_publish_status) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?5, 'queued') ON CONFLICT(id) DO UPDATE SET package_json=excluded.package_json, active=1, updated_at=excluded.updated_at, last_publish_status='queued'").bind(id, publicId, name, JSON.stringify(checked.package), timestamp).run();
-      try { await triggerPublish(env, id); } catch (error) { await env.DB.prepare("UPDATE profiles SET last_publish_status='publish_failed', updated_at=?1 WHERE id=?2").bind(now(), id).run(); return json({ error: `Profile saved but publish failed: ${error.message}` }, 502); }
-      const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, ""); const wakeUrl = `${origin}/students/${publicId}/wake.json`; const shortcutUrl = `${workerSiteURL(env)}/public/profiles/${publicId}/wake.json`; return json({ id, public_id: publicId, page_url: `${origin}/students/${publicId}/`, wake_url: wakeUrl, shortcut_url: shortcutUrl, alarm_label: "Shahaf", warnings: checked.warnings || [], status: "queued" });
+      const publish = await publishStatus(env, id);
+      if (publish === "failed") await env.DB.prepare("UPDATE profiles SET last_publish_status='publish_failed', updated_at=?1 WHERE id=?2").bind(now(), id).run();
+      const origin = env.PUBLIC_SITE_ORIGIN.replace(/\/$/, ""); const wakeUrl = `${origin}/students/${publicId}/wake.json`; const shortcutUrl = `${workerSiteURL(env)}/public/profiles/${publicId}/wake.json`; return json({ id, public_id: publicId, page_url: `${origin}/students/${publicId}/`, wake_url: wakeUrl, shortcut_url: shortcutUrl, alarm_label: "Shahaf", warnings: checked.warnings || [], status: "accepted", publish_status: publish });
     }
     if (match && request.method === "PATCH") {
       if (!(await rateLimit(env, `publish:${await hash(cookie(request, "__Host-shahaf_session"))}`, 20, 3600))) return json({ error: "publish rate limit reached" }, 429);
@@ -1145,8 +1357,9 @@ export default {
       const name = checked.package.student.name || current.name;
       checked.package.student.name = name;
       await env.DB.prepare("UPDATE profiles SET name=?1, package_json=?2, updated_at=?3, last_publish_status='queued' WHERE id=?4").bind(name, JSON.stringify(checked.package), now(), match[1]).run();
-      try { await triggerPublish(env, match[1]); } catch (error) { await env.DB.prepare("UPDATE profiles SET last_publish_status='publish_failed', updated_at=?1 WHERE id=?2").bind(now(), match[1]).run(); return json({ error: `Profile saved but publish failed: ${error.message}` }, 502); }
-      return json({ status: "queued", id: match[1] });
+      const publish = await publishStatus(env, match[1]);
+      if (publish === "failed") await env.DB.prepare("UPDATE profiles SET last_publish_status='publish_failed', updated_at=?1 WHERE id=?2").bind(now(), match[1]).run();
+      return json({ status: "accepted", publish_status: publish, id: match[1] });
     }
     const disable = url.pathname.match(/^\/api\/profiles\/([^/]+)\/disable$/);
     if (disable && request.method === "POST") {
@@ -1154,8 +1367,7 @@ export default {
       const current = await env.DB.prepare("SELECT id FROM profiles WHERE id=?1").bind(disable[1]).first();
       if (!current) return json({ error: "not found" }, 404);
       await env.DB.prepare("UPDATE profiles SET active=0, updated_at=?1, last_publish_status='queued' WHERE id=?2").bind(now(), disable[1]).run();
-      try { await triggerPublish(env, disable[1]); } catch (error) { return json({ error: `Disabled locally but publish failed: ${error.message}` }, 502); }
-      return json({ status: "queued" });
+      return json({ status: "accepted", publish_status: await publishStatus(env, disable[1]) });
     }
     const enable = url.pathname.match(/^\/api\/profiles\/([^/]+)\/enable$/);
     if (enable && request.method === "POST") {
@@ -1163,16 +1375,14 @@ export default {
       const current = await env.DB.prepare("SELECT id FROM profiles WHERE id=?1").bind(enable[1]).first();
       if (!current) return json({ error: "not found" }, 404);
       await env.DB.prepare("UPDATE profiles SET active=1, updated_at=?1, last_publish_status='queued' WHERE id=?2").bind(now(), enable[1]).run();
-      try { await triggerPublish(env, enable[1]); } catch (error) { return json({ error: `Enabled locally but publish failed: ${error.message}` }, 502); }
-      return json({ status: "queued" });
+      return json({ status: "accepted", publish_status: await publishStatus(env, enable[1]) });
     }
     if (match && request.method === "DELETE") {
       if (!(await rateLimit(env, `publish:${await hash(cookie(request, "__Host-shahaf_session"))}`, 20, 3600))) return json({ error: "publish rate limit reached" }, 429);
       const current = await env.DB.prepare("SELECT id, public_id, name FROM profiles WHERE id=?1").bind(match[1]).first();
       if (!current) return json({ error: "not found" }, 404);
       await env.DB.prepare("DELETE FROM profiles WHERE id=?1").bind(match[1]).run();
-      try { await triggerPublish(env, match[1]); } catch (error) { return json({ error: `Profile deleted locally but publish failed: ${error.message}` }, 502); }
-      return json({ status: "queued", deleted: true, public_id: current.public_id });
+      return json({ status: "accepted", publish_status: await publishStatus(env, match[1]), deleted: true, public_id: current.public_id });
     }
     const publishPost = url.pathname.match(/^\/api\/publish\/([^/]+)$/);
     if (publishPost && request.method === "POST") {

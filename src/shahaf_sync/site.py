@@ -86,9 +86,10 @@ def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bo
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     cache_prefix = f"shahaf-schedule-{safe_profile_id}-"
-    cache_name = f"{cache_prefix}v5"
+    cache_name = f"{cache_prefix}v6"
     service_worker = f'''const CACHE_NAME = {json.dumps(cache_name)};
 const CACHE_PREFIX = {json.dumps(cache_prefix)};
+const PROFILE_ID = {json.dumps(profile_id)};
 const APP_SHELL = ["./", "./index.html", "./data.json", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png", "./fonts/Heebo-400.ttf", "./fonts/Heebo-500.ttf", "./fonts/Heebo-600.ttf", "./fonts/Heebo-700.ttf", "./fonts/Heebo-800.ttf"];
 
 const refreshNavigation = async (request, cache) => {{
@@ -101,7 +102,12 @@ const refreshNavigation = async (request, cache) => {{
 const refreshData = async (request, cache) => {{
   try {{
     const response = await fetch(request);
-    if (response.ok) {{
+    if (response.ok && (response.headers.get("content-type") || "").includes("application/json")) {{
+      const payload = await response.clone().json();
+      if (payload.id !== PROFILE_ID || !Number.isFinite(Date.parse(payload.generated_at)) || !Array.isArray(payload.schedule) || !Array.isArray(payload.changes) || !Array.isArray(payload.exams)) throw new Error("Invalid schedule response");
+      const previous = await cache.match("./data.json");
+      const previousData = previous ? await previous.clone().json().catch(() => null) : null;
+      if (previousData && Date.parse(payload.generated_at) < Date.parse(previousData.generated_at)) return previous;
       await cache.put("./data.json", response.clone());
       return response;
     }}
@@ -110,7 +116,10 @@ const refreshData = async (request, cache) => {{
 }};
 
 self.addEventListener("install", (event) => {{
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
+  event.waitUntil(caches.open(CACHE_NAME).then(async (cache) => {{
+    await cache.addAll(APP_SHELL.filter((url) => url !== "./data.json"));
+    await refreshData(new Request(new URL("./data.json", self.location.href)), cache);
+  }}));
   self.skipWaiting();
 }});
 
@@ -434,7 +443,14 @@ def build_wake_data(
         future_dates = [candidate for candidate in candidate_dates if candidate > current_day]
         base["next_scheduled_school_day"] = future_dates[0].isoformat() if future_dates else None
         for school_day in candidate_dates:
-            fallback_at = datetime.combine(school_day, time.fromisoformat(fallback_wake_time)).replace(tzinfo=zone)
+            try:
+                fallback_clock = time.fromisoformat(fallback_wake_time)
+                if fallback_clock.tzinfo is not None:
+                    raise ValueError("fallback clock must be local")
+                fallback_at = datetime.combine(school_day, fallback_clock).replace(tzinfo=zone)
+            except (TypeError, ValueError):
+                base["fallback_status"] = "stale"
+                return base
             if school_day == current_day and fallback_at <= current:
                 continue
             base.update(
@@ -463,7 +479,8 @@ def build_wake_data(
             item_date = date.fromisoformat(str(item["date"]))
             time.fromisoformat(str(item["start"]))
         except (KeyError, TypeError, ValueError):
-            continue
+            base.update(stale=True, fallback_status="unavailable", shortcut_action="leave")
+            return base
         if item_date.weekday() in ISRAEL_WEEKEND_WEEKDAYS:
             continue
         if item_date >= today:
@@ -489,7 +506,7 @@ def build_wake_data(
             if special_wake_time is not None
             else datetime.combine(school_day, first_start) - timedelta(minutes=buffer_minutes)
         )
-        if round_to_minutes > 1:
+        if round_to_minutes > 1 and special_wake_time is None:
             rounded_minutes = (wake_naive.hour * 60 + wake_naive.minute) // round_to_minutes * round_to_minutes
             wake_naive = wake_naive.replace(hour=rounded_minutes // 60, minute=rounded_minutes % 60, second=0, microsecond=0)
         wake_local = wake_naive.replace(tzinfo=zone)
@@ -560,6 +577,7 @@ def render_site(
     transit_wake: dict[str, Any] | None = None,
     alarm_settings: dict[str, Any] | None = None,
     alarm_override: dict[str, Any] | None = None,
+    alarm_overrides: list[dict[str, Any]] | None = None,
     wake_time_by_first_lesson_start: dict[str, str] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -647,12 +665,14 @@ def render_site(
                 # endpoint because public_profile is false there.
                 wake_data = dict(safe_transit_wake)
             wake_data["profile_id"] = profile_id
+            wake_data["generated_at"] = generated_at
             alarm_baseline = dict(wake_data)
             if alarm_settings:
                 wake_data = apply_alarm_controls(
                     wake_data,
                     alarm_settings,
                     override=alarm_override,
+                    overrides=alarm_overrides,
                     now=now,
                 )
                 wake_data["alarm_control"] = {
@@ -679,6 +699,38 @@ def render_site(
                 )
             }
             primary_profile["wake"] = wake_data
+            # Controls always affect a later school day; the Shortcut root may
+            # still need today's alarm. Keep those two states separate.
+            zone = ZoneInfo("Asia/Jerusalem")
+            current = now or datetime.now(zone)
+            current = current.astimezone(zone) if current.tzinfo else current.replace(tzinfo=zone)
+            if str(alarm_baseline.get("next_school_day") or "") > current.date().isoformat():
+                next_baseline = dict(alarm_baseline)
+            elif safe_transit_wake is None:
+                next_baseline = build_wake_data(
+                    schedule_data, schedule_available=schedule is not None, stale=stale,
+                    now=current.replace(hour=23, minute=59, second=59),
+                    alarm_safety=alarm_safety, alarm_safety_reason=alarm_safety_reason,
+                    buffer_minutes=int((alarm_settings or {}).get("wake_buffer_minutes", 75)),
+                    min_wake_time=(alarm_settings or {}).get("min_wake_time"),
+                    max_wake_time=(alarm_settings or {}).get("max_wake_time"),
+                    round_to_minutes=int((alarm_settings or {}).get("round_to_minutes", 1)),
+                    no_lessons_policy=str((alarm_settings or {}).get("no_lessons_policy", "clear")),
+                    stale_policy=str((alarm_settings or {}).get("stale_policy", "leave")),
+                    fallback_wake_time=str((alarm_settings or {}).get("fallback_wake_time", "07:15")),
+                    wake_time_by_first_lesson_start=wake_time_by_first_lesson_start,
+                )
+                # Planning a Sunday alarm on a weekend is fine for display;
+                # the Shortcut root remains protected against weekend rings.
+                if next_baseline.get("fallback_status") == "none" and next_baseline.get("wake_at") and alarm_safety in (None, "approved", "not-required"):
+                    next_baseline["shortcut_action"] = "set"
+            else:
+                next_baseline = {"next_school_day": alarm_baseline.get("next_scheduled_school_day"), "shortcut_action": "leave", "enabled": False, "stale": stale, "fallback_status": "no-safe-route"}
+            next_baseline.update(profile_id=profile_id, generated_at=generated_at)
+            next_alarm = apply_alarm_controls(next_baseline, alarm_settings or {}, override=alarm_override, overrides=alarm_overrides, now=current, preview=True)
+            next_alarm["alarm_baseline"] = {key: next_baseline.get(key) for key in wake_data["alarm_baseline"]}
+            next_alarm["alarm_control"]["settings"] = public_alarm_settings(alarm_settings or {})
+            wake_data["next_alarm"] = next_alarm
         data["wake"] = wake_data
     if safe_transit_wake is not None:
         data["transit_wake"] = safe_transit_wake
@@ -705,7 +757,14 @@ def render_site(
     changes_html = '''<section class="changes" id="changes-view" aria-labelledby="changes-title"><div class="section-title"><h2 id="changes-title" data-i18n="changes">Changes</h2><span id="changes-count">0</span></div><div class="change-list" id="change-list"></div></section>'''
 
     transit_html = '''<section class="transit-wake-card" id="transit-wake-card" aria-labelledby="transit-title"><div class="section-title"><h2 id="transit-title" data-i18n="busPlan">Bus plan</h2><span id="transit-status">Checking</span></div><div id="transit-summary" class="transit-summary" data-i18n="checkingRoute">Checking the safest scheduled route…</div><div id="transit-legs" class="transit-legs"></div><p class="transit-note" data-i18n="earlierBuses">Earlier buses were considered; this is the latest scheduled departure that still arrives safely.</p><a id="transit-map" class="transit-map" href="#" target="_blank" rel="noreferrer" data-i18n="verifyRoute">Verify route in Google Maps ↗</a></section>''' if profile_id == "ya1" else ""
-    alarm_html = '''<section class="alarm-self-service" id="alarm-self-service" aria-labelledby="alarm-self-service-title"><div class="section-title"><h2 id="alarm-self-service-title" data-i18n="alarmTitle">My alarm</h2></div><div class="alarm-scheduled" aria-live="polite"><span data-i18n="alarmScheduled">Scheduled for</span><strong id="alarm-scheduled-time">—</strong></div><button id="alarm-self-service-toggle" class="small-button" type="button" aria-expanded="false" aria-controls="alarm-self-service-panel" data-i18n="alarmButton">Cancel / move my next alarm</button><div id="alarm-self-service-panel" class="alarm-panel" hidden><div class="alarm-actions"><button id="alarm-cancel-today" class="alarm-action alarm-action-danger" type="button" data-i18n="cancelTodayAlarm">Cancel my next alarm</button><div class="alarm-time-row"><label for="alarm-move-time" data-i18n="moveAlarmTo">Move my next alarm to</label><input id="alarm-move-time" type="time" inputmode="numeric" step="60"><button id="alarm-move-today" class="alarm-action" type="button" data-i18n="moveAlarm">Move alarm</button></div><button id="alarm-restore" class="alarm-action" type="button" data-i18n="restoreAlarm">Restore correct time</button></div></div></section>''' if public_profile else ""
+    alarm_html = '''<section class="alarm-self-service" id="alarm-self-service" aria-labelledby="alarm-self-service-title">
+<div class="section-title"><h2 id="alarm-self-service-title" data-i18n="alarmTitle">My alarm</h2></div>
+<div class="alarm-scheduled" aria-live="polite"><div><span data-i18n="alarmScheduled">Scheduled for</span><span id="alarm-scheduled-date" class="alarm-date"></span></div><strong id="alarm-scheduled-time">—</strong></div>
+<button id="alarm-self-service-toggle" class="small-button" type="button" aria-expanded="false" aria-controls="alarm-self-service-panel" data-i18n="alarmButton">Cancel / move my next alarm</button>
+<div id="alarm-self-service-panel" class="alarm-panel" hidden><div class="alarm-actions">
+<div class="alarm-time-row"><label for="alarm-move-time" data-i18n="moveAlarmTo">Move my next alarm to</label><input id="alarm-move-time" type="time" inputmode="numeric" step="60"><button id="alarm-move-today" class="alarm-action" type="button" data-i18n="moveAlarm">Move alarm</button></div>
+<div class="alarm-secondary-actions"><button id="alarm-cancel-today" class="alarm-action alarm-action-danger" type="button" data-i18n="cancelTodayAlarm">Cancel my next alarm</button><button id="alarm-restore" class="alarm-action" type="button" data-i18n="restoreAlarm">Restore correct time</button></div>
+</div></div><p id="alarm-feedback" role="status" aria-live="polite" hidden></p></section>''' if public_profile else ""
 
     gate_html = '''<section id="site-access-gate" class="site-access-gate" aria-labelledby="gate-title"><div class="gate-card"><p class="eyebrow" data-i18n="privatePage">Private page</p><h1 id="gate-title" data-i18n="enterYa1Schedule">Enter Ya1 schedule</h1><p data-i18n="typePhrase">Type the access phrase to continue.</p><form id="gate-form"><label for="gate-phrase" data-i18n="accessPhrase">Access phrase</label><input id="gate-phrase" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" dir="auto" required><button type="submit" data-i18n="enter">Enter</button><p id="gate-error" role="alert" aria-live="polite"></p></form></div></section>''' if profile_id == "ya1" else ""
     gate_css = '''.site-locked .app{display:none}.site-access-gate{display:grid;place-items:center;min-height:100vh;padding:24px}.site-access-gate[hidden]{display:none}.gate-card{width:min(100%,420px);padding:25px 22px;border:1px solid var(--line);border-radius:22px;background:var(--card);box-shadow:var(--shadow)}.gate-card h1{font-size:34px;margin:8px 0}.gate-card>p:not(.eyebrow){color:var(--muted);font-size:14px}.gate-card label{display:block;margin:20px 0 7px;font-size:12px;font-weight:750}.gate-card input{width:100%;height:47px;padding:0 13px;border:1px solid var(--line);border-radius:12px;background:var(--paper);color:var(--ink);font:inherit}.gate-card button{width:100%;height:47px;margin-top:11px;border:0;border-radius:12px;background:var(--ink);color:#fff;font:inherit;font-weight:800;cursor:pointer}.gate-card #gate-error{min-height:18px;margin:9px 0 0;color:var(--red);font-size:12px}''' if profile_id == "ya1" else ""
@@ -734,6 +793,7 @@ def render_site(
             "alarmConfirmCancel": "Cancel this schedule’s next alarm?", "alarmConfirmMove": "Move this schedule’s next alarm to {time}?", "alarmConfirmRestore": "Restore this schedule’s alarm to its correct original time?", "alarmSaving": "Saving next alarm change…",
             "alarmCancelQueued": "Next alarm cancellation is queued. Run the Shahaf Shortcut to apply it immediately.", "alarmMoveQueued": "Next alarm move is queued. Run the Shahaf Shortcut to apply it immediately.", "alarmRestoreQueued": "Restore is queued. Run the Shahaf Shortcut to apply the correct original alarm time.",
             "alarmError": "The alarm change could not be submitted. Please try again.", "alarmFutureTime": "Choose a future time for the next alarm.",
+            "alarmPreserved": "Current alarm preserved", "alarmCancelled": "Cancelled", "alarmUnconfirmed": "Could not confirm the change. Refresh the alarm status before trying again.", "syncChecking": "Checking for updates…", "syncAge": "Last school sync: {time}", "syncOld": "School data needs a refresh",
             "privatePage": "Private page", "enterYa1Schedule": "Enter Ya1 schedule", "typePhrase": "Type the access phrase to continue.",
             "accessPhrase": "Access phrase", "enter": "Enter", "incorrectPhrase": "That phrase is not correct.", "everyPeriod": "Every period",
             "backToNow": "Back to now", "chooseSchoolDay": "Choose a school day", "today": "Today", "loading": "Loading…", "noSchoolDays": "No school days are available yet.",
@@ -757,6 +817,7 @@ def render_site(
             "alarmConfirmCancel": "לבטל את ההתראה הבאה של המערכת הזו?", "alarmConfirmMove": "לשנות את ההתראה הבאה של המערכת הזו לשעה {time}?", "alarmConfirmRestore": "להחזיר את ההתראה של המערכת הזו לשעה המקורית והנכונה?", "alarmSaving": "שומר את שינוי ההתראה הבאה…",
             "alarmCancelQueued": "ביטול ההתראה הבאה הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל מיד.", "alarmMoveQueued": "שינוי ההתראה הבאה הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל מיד.", "alarmRestoreQueued": "השחזור הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל את שעת ההשכמה המקורית והנכונה.",
             "alarmError": "לא ניתן לשלוח את שינוי ההתראה. נסה שוב.", "alarmFutureTime": "יש לבחור שעה עתידית להתראה הבאה.",
+            "alarmPreserved": "ההתראה הקיימת נשמרת", "alarmCancelled": "בוטלה", "alarmUnconfirmed": "לא ניתן לאשר את השינוי. יש לרענן את מצב ההתראה לפני ניסיון נוסף.", "syncChecking": "בודק עדכונים…", "syncAge": "סנכרון אחרון: {time}", "syncOld": "צריך לרענן את נתוני המערכת",
             "privatePage": "עמוד פרטי", "enterYa1Schedule": "כניסה למערכת י״א 1", "typePhrase": "הקלד את משפט הגישה כדי להמשיך.", "accessPhrase": "משפט גישה", "enter": "כניסה", "incorrectPhrase": "המשפט אינו נכון.",
             "everyPeriod": "כל השעות", "backToNow": "חזרה לעכשיו", "chooseSchoolDay": "בחירת יום לימודים", "today": "היום", "loading": "טוען…", "noSchoolDays": "אין ימי לימודים זמינים עדיין.", "changes": "שינויים",
             "noUpcomingChanges": "אין ביטולים או עדכונים קרובים.", "cancelled": "בוטל", "changed": "שונה", "added": "נוסף", "scheduleUpdate": "עדכון מערכת", "period": "שעה",
@@ -817,6 +878,7 @@ html[dir="rtl"] .identity,html[dir="rtl"] .source,html[dir="rtl"] .view-switch,h
  .view-panel-enter-next{{animation:view-in-next .46s cubic-bezier(.2,.8,.2,1) both}}.view-panel-enter-previous{{animation:view-in-previous .46s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-next{{animation:day-in-next .42s cubic-bezier(.2,.8,.2,1) both}}.day-surface-enter-previous{{animation:day-in-previous .42s cubic-bezier(.2,.8,.2,1) both}}
  .alarm-self-service{{margin:18px 0 29px;padding:17px 18px;border:1px solid var(--line);border-radius:18px;background:var(--card);box-shadow:0 5px 16px #142b3508}}.alarm-self-service .section-title{{margin-bottom:9px}}.alarm-self-service .section-title h2{{font-size:21px}}.alarm-scheduled{{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 11px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--muted);font-size:12px}}.alarm-scheduled strong{{color:var(--ink);font-size:16px;letter-spacing:-.02em;direction:ltr;unicode-bidi:isolate;font-variant-numeric:tabular-nums;white-space:nowrap}}html[dir="rtl"] .alarm-scheduled{{direction:rtl}}.alarm-panel[hidden]{{display:none}}.alarm-help{{margin:0 0 13px;color:var(--muted);font-size:12px;line-height:1.4}}.alarm-actions{{display:grid;gap:9px}}.alarm-action{{min-height:42px;padding:10px 13px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-size:13px;font-weight:750;cursor:pointer;text-align:start;transition:background-color .2s ease,border-color .2s ease,transform .2s ease}}.alarm-action-danger{{border-color:#f1d0d0;color:var(--red)}}.alarm-action:disabled,.alarm-self-service .small-button:disabled{{cursor:not-allowed;opacity:.55}}.alarm-action.is-loading{{position:relative;color:transparent;pointer-events:none}}.alarm-self-service .alarm-action.is-loading:disabled{{opacity:1}}.alarm-action.is-loading::after{{content:"";position:absolute;left:50%;top:50%;width:15px;height:15px;margin:-8px;border:2px solid var(--ink);border-top-color:transparent;border-radius:50%;animation:alarm-spin .7s linear infinite}}.alarm-action-danger.is-loading::after{{border-color:var(--red);border-top-color:transparent}}@keyframes alarm-spin{{to{{transform:rotate(360deg)}}}}.alarm-time-row{{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px}}.alarm-time-row label{{grid-column:1 / -1;color:var(--muted);font-size:12px;font-weight:700}}.alarm-time-row input{{width:100%;min-width:0;min-height:42px;padding:8px 10px;border:1px solid var(--line);border-radius:11px;background:var(--paper);color:var(--ink);font:inherit;font-variant-numeric:tabular-nums}}.alarm-time-row button{{min-width:0;white-space:nowrap}}.alarm-time-row input:focus{{outline:3px solid #8ecdc055;border-color:#8ecdc0}}.alarm-status{{min-height:18px;margin:10px 0 0;color:var(--green);font-size:12px;line-height:1.4}}.alarm-status:empty{{display:none}}
  {gate_css}
+.alarm-date{{display:block;margin-top:4px;color:var(--ink);font-size:13px;font-weight:650}}.alarm-scheduled{{align-items:center;min-height:74px;padding:13px 14px}}.alarm-scheduled strong{{font-size:23px;white-space:normal;text-align:end;max-width:58%}}.alarm-secondary-actions{{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px}}.alarm-time-row input{{box-sizing:border-box;max-width:100%;inline-size:100%;min-inline-size:0;height:44px}}.alarm-time-row input::-webkit-date-and-time-value{{text-align:center}}.alarm-panel{{padding-top:13px}}#alarm-feedback{{margin:12px 0 0;padding:11px 12px;border-radius:10px;background:#e8f4ee;color:var(--green);font-size:13px;line-height:1.45}}#alarm-feedback.is-error{{background:#fff0f0;color:var(--red)}}#alarm-feedback[hidden]{{display:none}}@media(max-width:380px){{.alarm-secondary-actions{{grid-template-columns:1fr}}.alarm-scheduled strong{{font-size:20px}}}}
 </style></head><body class="{theme_class}{' site-locked' if profile_id == 'ya1' else ''}">{gate_html}{gate_script}<main class="app">
 <header class="topbar"><a class="identity" href="."><img class="mark" src="./header-logo.png" width="43" height="43" decoding="async" fetchpriority="low" alt="" aria-hidden="true"><span><strong>My schedule</strong></span></a></header>
   <nav class="view-switch" aria-label="Schedule views"><button id="now-tab" class="is-active" type="button" aria-selected="true">Now</button><button id="full-tab" type="button" aria-selected="false">Schedule</button><button id="exams-tab" type="button" aria-selected="false">Exams</button></nav>
@@ -868,8 +930,42 @@ let scheduleAvailable = Boolean(activeProfile.schedule_available);
 let changes = activeProfile.changes || [];
 let events = activeProfile.events || [];
  let exams = activeProfile.exams || [];
- const transitWake = activeProfile.transit_wake || null;
- let alarmState = activeProfile.wake || null;
+ let transitWake = activeProfile.transit_wake || null;
+ let alarmState = upcomingAlarm(activeProfile.wake) || null;
+ let dataGeneratedAt = activeProfile.generated_at || "";
+ let dataIsStale = Boolean(activeProfile.stale);
+ let alarmRevision = 0;
+ let alarmBusy = false;
+ let alarmIsAuthoritative = false;
+ let alarmRefreshInFlight = false;
+ let dataRefreshInFlight = false;
+ let lastRefreshStarted = 0;
+ const publicWakeEndpoint = publicAlarmEndpoint.replace(/alarm-command$/, "wake.json");
+ async function fetchJsonTimed(url, options = {{}}) {{
+   const controller = new AbortController();
+   const timer = setTimeout(() => controller.abort(), 15000);
+   try {{
+     const response = await fetch(url, {{ cache: "no-store", ...options, signal: controller.signal }});
+     const body = await response.json();
+     if (!response.ok) throw new Error(body.error || tr("alarmError"));
+     return body;
+   }} finally {{ clearTimeout(timer); }}
+ }}
+ function validAlarmPayload(payload) {{ return payload && payload.profile_id === activeProfile.id && ["set", "clear", "leave"].includes(payload.shortcut_action); }}
+ function upcomingAlarm(payload) {{ return validAlarmPayload(payload?.next_alarm) ? payload.next_alarm : payload; }}
+ async function refreshAlarmState() {{
+   if (!publicWakeEndpoint || alarmRefreshInFlight || alarmBusy) return;
+   alarmRefreshInFlight = true;
+   const revision = alarmRevision;
+   try {{
+     const latest = await fetchJsonTimed(publicWakeEndpoint);
+     if (revision !== alarmRevision || !validAlarmPayload(latest)) return;
+     alarmState = upcomingAlarm(latest);
+     alarmIsAuthoritative = true;
+     renderScheduledAlarm();
+   }} catch {{ /* Keep the last confirmed state; freshness is shown separately. */ }}
+   finally {{ alarmRefreshInFlight = false; }}
+ }}
 function nowInSchoolZone() {{ const parts = new Intl.DateTimeFormat("en-CA", {{ timeZone: scheduleZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }}).formatToParts(new Date()); const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value])); return {{ date: `${{values.year}}-${{values.month}}-${{values.day}}`, minutes: Number(values.hour) * 60 + Number(values.minute) }}; }}
 function installAlarmSelfService() {{
   const card = document.getElementById("alarm-self-service");
@@ -880,10 +976,13 @@ function installAlarmSelfService() {{
   const move = document.getElementById("alarm-move-today");
   const restore = document.getElementById("alarm-restore");
   const time = document.getElementById("alarm-move-time");
-  const status = document.getElementById("alarm-self-service-status");
+  const status = document.getElementById("alarm-feedback");
+  const feedback = (message, failed = false) => {{ if (status) {{ status.hidden = !message; status.textContent = message; status.classList.toggle("is-error", failed); }} }};
   const controls = [toggle, cancel, move, restore, time].filter(Boolean);
   const actionButtons = {{ clear: cancel, set: move, restore }};
   const setBusy = (busy, action = "") => {{
+    alarmBusy = busy;
+    card.setAttribute("aria-busy", String(busy));
     controls.forEach((control) => {{ control.disabled = busy; }});
     card.classList.toggle("is-submitting", busy);
     Object.entries(actionButtons).forEach(([name, control]) => {{
@@ -896,38 +995,54 @@ function installAlarmSelfService() {{
     const messageKey = action === "clear" ? "alarmCancelQueued" : action === "restore" ? "alarmRestoreQueued" : "alarmMoveQueued";
     if (action === "set") payload.wake_time = time.value;
     setBusy(true, action);
-    if (status) status.textContent = tr("alarmSaving");
+    alarmRevision += 1;
+    feedback(tr("alarmSaving"));
     try {{
-      const response = await fetch(publicAlarmEndpoint, {{ method: "POST", mode: "cors", headers: {{ "content-type": "application/json" }}, body: JSON.stringify(payload) }});
-      const body = await response.json().catch(() => ({{}}));
-      if (!response.ok) throw new Error(body.error || tr("alarmError"));
-      if (action === "clear") alarmState = {{ ...(alarmState || {{}}), shortcut_action: "clear", wake_time: null, wake_at: null, enabled: false }};
-      if ((action === "set" || action === "restore") && typeof body.wake_time === "string" && /^\\d{{2}}:\\d{{2}}$/.test(body.wake_time)) alarmState = {{ ...(alarmState || {{}}), shortcut_action: "set", wake_time: body.wake_time, wake_at: body.wake_at || null, enabled: true }};
+      const body = await fetchJsonTimed(publicAlarmEndpoint, {{ method: "POST", mode: "cors", headers: {{ "content-type": "application/json" }}, body: JSON.stringify(payload) }});
+      alarmRevision += 1;
+      alarmIsAuthoritative = true;
+      if (validAlarmPayload(body.wake)) alarmState = upcomingAlarm(body.wake);
+      else if (action === "clear") alarmState = {{ ...(alarmState || {{}}), next_school_day: body.target_date, shortcut_action: "clear", wake_time: null, wake_at: null, enabled: false, fallback_status: "manual-clear" }};
+      else if (typeof body.wake_time === "string" && /^\\d{{2}}:\\d{{2}}$/.test(body.wake_time)) alarmState = {{ ...(alarmState || {{}}), next_school_day: body.target_date, shortcut_action: "set", wake_time: body.wake_time, wake_at: body.wake_at || null, enabled: true }};
       renderScheduledAlarm();
-      if (status) status.textContent = tr(messageKey);
+      feedback(tr(messageKey));
       close();
     }} catch (error) {{
-      if (status) status.textContent = error.message || tr("alarmError");
+      feedback(error.name === "AbortError" ? tr("alarmUnconfirmed") : error.message || tr("alarmError"), true);
     }} finally {{
       setBusy(false);
+      alarmRevision += 1;
+      renderScheduledAlarm();
+      refreshAlarmState();
     }}
   }};
   toggle.addEventListener("click", () => {{
     const open = panel.hidden;
     panel.hidden = !open;
     toggle.setAttribute("aria-expanded", String(open));
-    if (open) time.focus();
+    if (open) {{ time.value = alarmState?.wake_time || alarmState?.alarm_baseline?.wake_time || ""; time.focus(); }}
   }});
   cancel.addEventListener("click", () => {{ if (window.confirm(tr("alarmConfirmCancel"))) submit("clear"); }});
   restore.addEventListener("click", () => {{ if (window.confirm(tr("alarmConfirmRestore"))) submit("restore"); }});
   move.addEventListener("click", () => {{
-    if (!time.value) {{ if (status) status.textContent = tr("alarmFutureTime"); return; }}
+    if (!time.value) {{ feedback(tr("alarmFutureTime"), true); return; }}
     if (window.confirm(tr("alarmConfirmMove").replace("{{time}}", time.value))) submit("set");
   }});
 }}
 function minutes(value) {{ const [hour, minute] = value.split(":").map(Number); return hour * 60 + minute; }}
 function formatTime(value) {{ const [hour, minute] = value.split(":").map(Number); if (shahafIsHebrew) return `${{String(hour).padStart(2, "0")}}:${{String(minute).padStart(2, "0")}}`; return `${{hour % 12 || 12}}:${{String(minute).padStart(2, "0")}} ${{hour >= 12 ? "PM" : "AM"}}`; }}
-function renderScheduledAlarm() {{ const target = document.getElementById("alarm-scheduled-time"); if (!target) return; const value = String(alarmState?.wake_time || ""); target.textContent = alarmState?.shortcut_action === "set" && /^\\d{{2}}:\\d{{2}}$/.test(value) ? formatTime(value) : tr("alarmNotScheduled"); }}
+function renderScheduledAlarm() {{
+  const target = document.getElementById("alarm-scheduled-time");
+  if (!target) return;
+  const value = String(alarmState?.wake_time || "");
+  const action = alarmState?.shortcut_action;
+  target.textContent = action === "set" && /^\\d{{2}}:\\d{{2}}$/.test(value) ? formatTime(value) : action === "leave" ? tr("alarmPreserved") : alarmState?.fallback_status === "manual-clear" ? tr("alarmCancelled") : tr("alarmNotScheduled");
+  const date = document.getElementById("alarm-scheduled-date");
+  const day = String(alarmState?.next_school_day || "");
+  if (date) date.textContent = /^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(day) ? dateFormatter.format(schoolDate(day)) : "";
+  const restore = document.getElementById("alarm-restore");
+  if (restore && !alarmBusy) restore.disabled = !alarmState?.alarm_control?.override_active && !alarmState?.alarm_control?.override_pending && !String(alarmState?.fallback_status || "").startsWith("manual-");
+}}
 function escapeHtml(value) {{ return String(value ?? "").replace(/[&<>]/g, (char) => ({{"&":"&amp;","<":"&lt;",">":"&gt;"}}[char])).replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }}
 function detail(item) {{ return [item.teacher, item.room ? `${{tr("room")}} ${{item.room}}` : "", `${{tr("period")}} ${{item.period}}`].filter(Boolean).join(" · "); }}
 function renderTransitWake() {{ if (!transitWake) return; const card = document.getElementById("transit-wake-card"); const summary = document.getElementById("transit-summary"); const legs = document.getElementById("transit-legs"); const status = document.getElementById("transit-status"); const map = document.getElementById("transit-map"); if (!card || !summary || !legs || !status || !map) return; map.href = transitWake.google_maps_url || "#"; const action = transitWake.shortcut_action; card.classList.toggle("is-warning", action !== "set"); if (action === "set" && transitWake.route_departure && transitWake.route_arrival) {{ status.textContent = "Ready"; summary.textContent = `Leave home at ${{formatTime(transitWake.route_departure)}} · arrive by ${{formatTime(transitWake.route_arrival)}}`; legs.innerHTML = (transitWake.route || []).map((leg) => {{ if (leg.type === "transit") return `<div class="transit-leg"><strong>Bus ${{escapeHtml(leg.route)}}</strong><div>${{escapeHtml(leg.departure)}} ← ${{escapeHtml(leg.arrival)}}<span>${{escapeHtml(leg.from_stop)}} ← ${{escapeHtml(leg.to_stop)}}</span></div></div>`; return `<div class="transit-leg"><strong>Walk</strong><div>${{escapeHtml(leg.minutes)}} min<span>${{escapeHtml(leg.from)}} ← ${{escapeHtml(leg.to)}}</span></div></div>`; }}).join(""); return; }} status.textContent = action === "clear" ? "No route needed" : "Alarm unchanged"; summary.textContent = action === "clear" ? "No confirmed lessons are scheduled." : "Transit data is unavailable, so the existing alarm stays unchanged."; legs.innerHTML = ""; }}
@@ -974,7 +1089,7 @@ function renderFullDay(targetDate, direction = "") {{
   document.getElementById("selected-day-summary").textContent = `${{items.length}} lesson${{items.length === 1 ? "" : "s"}} · gaps included`;
   document.getElementById("schedule-periods").innerHTML = periods.map((slot) => {{
     const item = byPeriod[slot.period];
-    const cancelled = cancelledByOccurrence.has(`${{selected}}:${{slot.period}}`);
+    const cancelled = !item && cancelledByOccurrence.has(`${{selected}}:${{slot.period}}`);
     const rowClass = cancelled ? "is-cancelled" : item ? "has-lesson" : "is-gap";
     const ariaLabel = cancelled ? ' aria-label="' + escapeHtml(tr("cancelled")) + '"' : "";
     const outsideSchoolDay = firstLessonPeriod === null || slot.period < firstLessonPeriod || slot.period > lastLessonPeriod;
@@ -1017,18 +1132,53 @@ function localizeRenderedUi() {{
     transitCard.querySelectorAll(".transit-leg div").forEach((element) => {{ element.childNodes.forEach((node) => {{ if (node.nodeType === Node.TEXT_NODE) node.textContent = node.textContent.replace(/ min$/, shahafIsHebrew ? " דקות" : " min"); }}); }});
   }}
 }}
-const localizeLiveState = () => {{ const current = document.getElementById("current-subject"); const currentDetail = document.getElementById("current-detail"); const next = document.getElementById("next-subject"); const nextDetail = document.getElementById("next-detail"); const note = document.getElementById("schedule-note"); if (current) {{ if (current.textContent === "Schedule unavailable") current.textContent = tr("scheduleUnavailable"); else if (current.textContent === "No class right now") current.textContent = tr("noClassRightNow"); }} if (currentDetail) {{ if (currentDetail.textContent === "The synced timetable is not available yet") currentDetail.textContent = tr("timetableAfterSync"); else if (currentDetail.textContent === "You’re between lessons") currentDetail.textContent = tr("betweenLessons"); else if (currentDetail.textContent === "No lessons scheduled today") currentDetail.textContent = tr("noLessonsToday"); }} if (next) {{ if (next.textContent === "Try again later") next.textContent = tr("tryAgain"); else if (next.textContent === "No more lessons") next.textContent = tr("noMoreLessons"); }} if (nextDetail && nextDetail.textContent === "Nothing else is scheduled in the synced timetable") nextDetail.textContent = tr("nothingElse"); if (note) {{ if (note.textContent.indexOf("You’re in Period ") === 0) note.textContent = tr("inPeriod") + " " + note.textContent.slice(17) + (shahafIsHebrew ? " עכשיו" : " now"); else if (note.textContent.indexOf("Next lesson: Period ") === 0) note.textContent = tr("nextLesson") + ": " + tr("period") + " " + note.textContent.slice(20); else if (note.textContent === "You’re all done for the synced schedule") note.textContent = tr("allDone"); }} }};
+const localizeLiveState = () => {{
+  const current = document.getElementById("current-subject");
+  const currentDetail = document.getElementById("current-detail");
+  const next = document.getElementById("next-subject");
+  const nextDetail = document.getElementById("next-detail");
+  const note = document.getElementById("schedule-note");
+  if (current) {{
+    if (current.textContent === "Schedule unavailable") current.textContent = tr("scheduleUnavailable");
+    else if (current.textContent === "No class right now") current.textContent = tr("noClassRightNow");
+  }}
+  if (currentDetail) {{
+    if (currentDetail.textContent === "The synced timetable is not available yet") currentDetail.textContent = tr("timetableAfterSync");
+    else if (currentDetail.textContent === "You’re between lessons") currentDetail.textContent = tr("betweenLessons");
+    else if (currentDetail.textContent === "No lessons scheduled today") currentDetail.textContent = tr("noLessonsToday");
+  }}
+  if (next) {{
+    if (next.textContent === "Try again later") next.textContent = tr("tryAgain");
+    else if (next.textContent === "No more lessons") next.textContent = tr("noMoreLessons");
+  }}
+  if (nextDetail && nextDetail.textContent === "Nothing else is scheduled in the synced timetable") nextDetail.textContent = tr("nothingElse");
+  if (note) {{
+    if (note.textContent.indexOf("You’re in Period ") === 0) {{
+      const period = note.textContent.slice("You’re in Period ".length).replace(/[ \t]+now$/, "");
+      note.textContent = tr("inPeriod") + " " + period + (shahafIsHebrew ? " עכשיו" : " now");
+    }} else if (note.textContent.indexOf("Next lesson: Period ") === 0) {{
+      const period = note.textContent.slice("Next lesson: Period ".length);
+      note.textContent = tr("nextLesson") + ": " + tr("period") + " " + period;
+    }} else if (note.textContent === "You’re all done for the synced schedule") note.textContent = tr("allDone");
+  }}
+}};
 const baseRenderChanges = renderChanges; renderChanges = () => {{ baseRenderChanges(); localizeRenderedUi(); }};
 const baseRenderExams = renderExams; renderExams = () => {{ baseRenderExams(); localizeRenderedUi(); }};
 const baseRenderFullDay = renderFullDay; renderFullDay = (targetDate, direction) => {{ baseRenderFullDay(targetDate, direction); const summary = document.getElementById("selected-day-summary"); if (summary) {{ const count = document.querySelectorAll("#schedule-periods .has-lesson").length; summary.textContent = count + " " + (count === 1 ? tr("lessonSingular") : tr("lessons")) + " · " + tr("gapsIncluded"); }} localizeRenderedUi(); }};
 const baseRefreshLiveLessons = refreshLiveLessons; refreshLiveLessons = () => {{ baseRefreshLiveLessons(); localizeLiveState(); }};
 const baseRenderTransitWake = renderTransitWake; renderTransitWake = () => {{ baseRenderTransitWake(); localizeRenderedUi(); }};
 async function refreshDataInBackground() {{
+  if (dataRefreshInFlight) return;
+  dataRefreshInFlight = true;
+  const revision = alarmRevision;
   try {{
-    const response = await fetch(`./data.json?refresh=${{Date.now()}}`, {{cache:"no-store"}});
-    if (!response.ok) return;
-    const latest = await response.json();
-    if (!latest || typeof latest !== "object") return;
+    const latest = await fetchJsonTimed(`./data.json?refresh=${{Date.now()}}`);
+    if (!latest || latest.id !== activeProfile.id || !Array.isArray(latest.schedule) || !Array.isArray(latest.changes) || !Array.isArray(latest.exams)) return;
+    if (!Number.isFinite(Date.parse(latest.generated_at)) || Date.parse(latest.generated_at) < Date.parse(dataGeneratedAt)) return;
+    dataGeneratedAt = latest.generated_at;
+    dataIsStale = Boolean(latest.stale);
+    if (revision === alarmRevision && !alarmIsAuthoritative && validAlarmPayload(latest.wake)) {{ alarmState = upcomingAlarm(latest.wake); renderScheduledAlarm(); }}
+    if (latest.transit_wake) transitWake = latest.transit_wake;
     if (Array.isArray(latest.schedule)) {{
       schedule = latest.schedule;
       scheduleAvailable = Boolean(latest.schedule_available);
@@ -1046,8 +1196,27 @@ async function refreshDataInBackground() {{
       if (target) renderFullDay(target);
     }}
     renderTransitWake();
-  }} catch {{}}
+  }} catch {{ /* The embedded or previously refreshed schedule remains available offline. */ }}
+  finally {{ dataRefreshInFlight = false; renderSyncStatus(); }}
 }}
+function renderSyncStatus() {{
+  const status = document.getElementById("sync-status");
+  if (!status) return;
+  const age = Date.now() - Date.parse(dataGeneratedAt);
+  const old = dataIsStale || !Number.isFinite(age) || age > 3 * 60 * 60 * 1000;
+  status.classList.toggle("stale", old);
+  const label = status.querySelector("[data-i18n]");
+  if (label) label.textContent = old ? tr("syncOld") : tr("synced");
+  status.title = Number.isFinite(age) ? tr("syncAge").replace("{{time}}", new Intl.DateTimeFormat(uiLocale, {{ timeZone:scheduleZone, month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" }}).format(new Date(dataGeneratedAt))) : tr("syncOld");
+}}
+function refreshAllData() {{
+  if (document.hidden || Date.now() - lastRefreshStarted < 10000) return;
+  lastRefreshStarted = Date.now();
+  refreshDataInBackground();
+  refreshAlarmState();
+}}
+document.addEventListener("visibilitychange", () => {{ if (!document.hidden) refreshAllData(); }});
+window.addEventListener("focus", refreshAllData);
  document.getElementById("now-tab").addEventListener("click", () => setView("now")); document.getElementById("full-tab").addEventListener("click", () => setView("full")); document.getElementById("exams-tab").addEventListener("click", () => setView("exams")); document.getElementById("back-to-now").addEventListener("click", () => setView("now")); document.getElementById("jump-today").addEventListener("click", () => {{ const today = nowInSchoolZone().date; scheduleDates().includes(today) ? selectDay(today) : renderFullDay(today); }});
 function moveViewBy(delta) {{ const views = ["now", "full", "exams"]; const index = views.indexOf(currentView()); const target = index + delta; if (target >= 0 && target < views.length) setView(views[target]); }}
 function moveDayBy(delta) {{ const dates = scheduleDates(); const index = dates.indexOf(selectedDayDate); const target = index + delta; if (target >= 0 && target < dates.length) renderFullDay(dates[target], delta > 0 ? "next" : "previous"); }}
@@ -1060,7 +1229,7 @@ attachSwipe(document.getElementById("full-day-content"), "days");
 attachSwipe(document.getElementById("now-view"), "views");
 attachSwipe(document.getElementById("changes-view"), "views");
 attachSwipe(document.getElementById("exams-view"), "views");
- renderScheduledAlarm(); installAlarmSelfService(); renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); document.body.classList.add("app-ready"); window.setTimeout(refreshDataInBackground, 0); setInterval(() => {{ refreshLiveLessons(); renderChanges(); }}, 30000); if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");
+ renderScheduledAlarm(); installAlarmSelfService(); renderChanges(); renderExams(); refreshLiveLessons(); renderTransitWake(); renderSyncStatus(); document.body.classList.add("app-ready"); window.setTimeout(refreshDataInBackground, 0); window.setTimeout(refreshAlarmState, 0); setInterval(refreshAllData, 120000); setInterval(() => {{ refreshLiveLessons(); renderChanges(); renderSyncStatus(); }}, 30000); if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");
 </script></body></html>
 '''
     (output_dir / "index.html").write_text(html, encoding="utf-8")

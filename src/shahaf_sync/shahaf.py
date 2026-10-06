@@ -205,6 +205,24 @@ def _plain(fragment: str) -> str:
     return re.sub(r"[ \t\r\n\u00a0]+", " ", unescape(text)).strip()
 
 
+def _validate_source_year(update_text: str, reference_date: date) -> None:
+    """Last-modified is not sync age; unchanged timetables may remain valid.
+
+    Reject another academic year's page, while allowing July/August setup
+    for the September school year. Never reinterpret years-old dates as now.
+    """
+    match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", update_text)
+    if not match:
+        raise ShahafSourceError("Shahaf update timestamp is malformed")
+    try:
+        updated = date(int(match[3]), int(match[2]), int(match[1]))
+    except ValueError as exc:
+        raise ShahafSourceError("Shahaf update timestamp is malformed") from exc
+    academic_year = reference_date.year if reference_date.month >= 9 else reference_date.year - 1
+    if updated < date(academic_year, 7, 1) or updated > reference_date + timedelta(days=1):
+        raise ShahafSourceError("Shahaf update timestamp belongs to an obsolete or future school year")
+
+
 def _date_from_header(fragment: str, reference_date: date) -> date:
     text = _plain(fragment)
     match = re.search(r"(\d{1,2})\.(\d{1,2})", text)
@@ -266,6 +284,7 @@ def parse_timetable_html(
         flags=re.IGNORECASE | re.DOTALL,
     )
     update_text = _plain(update_match.group(1)) if update_match else ""
+    _validate_source_year(update_text, reference_date)
     lessons: list[Lesson] = []
     row_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", table, flags=re.IGNORECASE | re.DOTALL)
     for row in row_matches:
@@ -278,7 +297,7 @@ def parse_timetable_html(
         period_match = re.search(r"\b(\d+)\b", name_text)
         times = re.findall(r"\b(\d{1,2}:\d{2})\b", name_text)
         if not period_match or len(times) < 2:
-            continue
+            raise ShahafSourceError("Shahaf timetable period/time row is malformed")
         period = int(period_match.group(1))
         cell_matches = re.findall(
             r"<td[^>]*class=[\"']TTCell[\"'][^>]*data-day=[\"'](\d+)[\"'][^>]*>(.*?)</td>",
@@ -288,7 +307,7 @@ def parse_timetable_html(
         for day_value, cell in cell_matches:
             day_number = int(day_value)
             if day_number not in header_dates:
-                continue
+                raise ShahafSourceError("Shahaf lesson references an unknown day")
             for lesson_fragment in re.findall(
                 r"<div[^>]*class=[\"']TTLesson[\"'][^>]*>(.*?)</div>",
                 cell,
@@ -296,7 +315,7 @@ def parse_timetable_html(
             ):
                 parsed = _lesson_from_fragment(lesson_fragment)
                 if not parsed:
-                    continue
+                    raise ShahafSourceError("Shahaf timetable lesson is malformed")
                 subject, teacher, room = parsed
                 hour_start, hour_end = times[0], times[1]
                 from datetime import time
@@ -349,6 +368,8 @@ def parse_changes_html(
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
+    if not select_match:
+        raise ShahafSourceError("Shahaf changes page has no selected class identity")
     if select_match:
         selected_class = any(
             re.search(rf"\bvalue=[\"']{re.escape(expected_class_id)}[\"']", attrs, re.IGNORECASE)
@@ -366,6 +387,7 @@ def parse_changes_html(
     update_text = _plain(update_match.group(1)) if update_match else ""
     if not update_text:
         raise ShahafSourceError("Shahaf changes page has no update timestamp")
+    _validate_source_year(update_text, reference_date)
 
     candidates: list[_HtmlNode] = []
     for node in _walk(parser.root):

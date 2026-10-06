@@ -5,7 +5,10 @@ from datetime import date, datetime, time, timedelta
 import argparse
 import json
 import os
+import re
 import shutil
+import time as system_time
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -17,7 +20,7 @@ from .exams import reconcile_exam_events
 from .ics import CalendarFormatError, parse_calendar
 from .model import EventSnapshot, Lesson, SourceSnapshot
 from .nim import EventSafetyDecision, NimError, NimSafetyClient, context_for_alarm_review, context_for_event_review
-from .profiles import apply_changes, lesson_to_dict, select_changes, select_exams, select_lessons
+from .profiles import apply_changes, change_matching_is_ambiguous, lesson_to_dict, select_changes, select_exams, select_lessons
 from .profile_package import ProfilePackageError, build_package_schedule, package_to_spec, validate_package
 from .reconcile import ChangeRecord, reconcile_calendar, reconcile_event_entries
 from .shahaf import ShahafSourceError, parse_changes_html, parse_events_html, parse_exams_html, parse_timetable_html
@@ -74,13 +77,18 @@ def load_config(path: Path) -> Config:
 
 def fetch_text(url: str) -> str:
     request = Request(url, headers={"User-Agent": "ostrovsky-shahaf-sync/0.1"})
-    try:
-        with urlopen(request, timeout=30) as response:
-            if response.status < 200 or response.status >= 300:
-                raise SyncFailure(f"Source returned HTTP {response.status}")
-            return response.read().decode("utf-8")
-    except (HTTPError, URLError, UnicodeDecodeError) as exc:
-        raise SyncFailure(f"Could not read source: {exc}") from exc
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=20) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise SyncFailure(f"Source returned HTTP {response.status}")
+                return response.read().decode("utf-8")
+        except (HTTPError, URLError, TimeoutError, OSError, UnicodeDecodeError, SyncFailure) as exc:
+            retryable = not isinstance(exc, HTTPError) or exc.code in {408, 425, 429, 500, 502, 503, 504}
+            if attempt == 2 or not retryable:
+                raise SyncFailure(f"Could not read source after {attempt + 1} attempt(s): {exc}") from exc
+            system_time.sleep(attempt + 1)
+    raise SyncFailure("Source retrieval exhausted")
 
 
 def fetch_source(
@@ -445,6 +453,8 @@ def _build_public_profile(
         for item in select_changes(changes_snapshot.changes, spec, lessons=selected_lessons)
         if window_start <= item.date <= window_end
     ]
+    if change_matching_is_ambiguous(selected_lessons, selected_changes):
+        raise SyncFailure("Ambiguous Shahaf change identity; preserving the last known timetable and alarm")
     selected_lessons = apply_changes(selected_lessons, selected_changes)
 
     exams_snapshot = spec.get("exams_snapshot")
@@ -516,8 +526,10 @@ def _build_public_profile(
 
 
 def _managed_specs(path: Path | None) -> list[dict[str, object]]:
-    if path is None or not path.exists():
+    if path is None:
         return []
+    if not path.is_file():
+        raise SyncFailure("Managed profile bundle is missing")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -526,13 +538,19 @@ def _managed_specs(path: Path | None) -> list[dict[str, object]]:
     if not isinstance(records, list):
         raise SyncFailure("Managed profile bundle must contain a profiles list")
     result: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
     for index, record in enumerate(records):
-        if not isinstance(record, dict) or not record.get("active", True):
+        if not isinstance(record, dict):
+            raise SyncFailure(f"Managed profile {index} must be an object")
+        if not record.get("active", True):
             continue
         public_id = str(record.get("public_id", ""))
         package = record.get("package")
-        if len(public_id) < 22 or not isinstance(package, dict):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{22,80}", public_id) or not isinstance(package, dict):
             raise SyncFailure(f"Managed profile {index} is missing public_id or package")
+        if public_id in seen_ids:
+            raise SyncFailure("Managed profile bundle contains duplicate IDs")
+        seen_ids.add(public_id)
         try:
             normalized = validate_package(package)
         except ProfilePackageError as exc:
@@ -543,6 +561,8 @@ def _managed_specs(path: Path | None) -> list[dict[str, object]]:
             spec["alarm_settings"] = record["alarm_settings"]
         if isinstance(record.get("alarm_override"), dict):
             spec["alarm_override"] = record["alarm_override"]
+        if isinstance(record.get("alarm_overrides"), list):
+            spec["alarm_overrides"] = record["alarm_overrides"]
         result.append(spec)
     return result
 
@@ -567,6 +587,9 @@ def _canonical_managed_profile_id(
             continue
         if class_number == config.class_number:
             matches.append(profile_id)
+    configured_id = str((config.special_requests or {}).get("profile_id") or "")
+    if configured_id:
+        return configured_id if configured_id in matches else None
     return matches[0] if len(matches) == 1 else None
 
 
@@ -580,6 +603,11 @@ def execute(
     current = now or _now(config)
     client = GistClient(token=os.environ.get("GIST_TOKEN"))
     site_path = _site_path(config, root)
+    # Validate the authoritative bundle before any output or external write.
+    managed_specs = _managed_specs(managed_profiles_path)
+    if managed_profiles_path is None and (site_path / "students").exists():
+        raise SyncFailure("Managed profile bundle is required to replace existing student outputs")
+    staging = None
     # The public surface now consists only of randomized managed profiles.
     # Remove the old root and /ya1 outputs before any success or failure path
     # can accidentally preserve or recreate them.
@@ -592,11 +620,6 @@ def execute(
         for child in managed_site_path.iterdir():
             if child.is_dir():
                 previous_managed[child.name] = _previous_site_state(child)
-    # This directory is generated exclusively from the private Worker bundle.
-    # Clearing this exact output root ensures disabled profiles disappear from
-    # the next Pages artifact.
-    if managed_site_path.exists():
-        shutil.rmtree(managed_site_path)
     source_url = f"{config.source_base_url}?cls={config.class_id}&tab=changes"
     try:
         gist_file = client.read_file(config.gist_id, config.gist_filename)
@@ -647,8 +670,6 @@ def execute(
             current.date() + timedelta(days=config.lookahead_days),
         )
         updated_content = calendar.render()
-        if updated_content != gist_file.content and not dry_run:
-            client.update_file(config.gist_id, config.gist_filename, updated_content)
         schedule = build_schedule(
             calendar,
             current.date().isoformat(),
@@ -676,12 +697,7 @@ def execute(
             event_alarm_safety_reason=root_event_processing.alarm_safety_reason,
         )
         profile_specs = [dict(spec) for spec in config.additional_profiles]
-        try:
-            profile_specs.extend(_managed_specs(managed_profiles_path))
-        except SyncFailure as managed_exc:
-            # A private bundle problem is isolated to the additive feature;
-            # it must not make the established master or legacy Ya1 sync fail.
-            print(f"Managed profiles skipped: {managed_exc}")
+        profile_specs.extend(managed_specs)
         profile_views: list[dict[str, object]] = []
         profile_specs_by_id: dict[str, dict[str, object]] = {}
         changes_cache: dict[str, object] = {str(config.class_id): snapshot}
@@ -734,6 +750,9 @@ def execute(
         transit_timestamp = ""
         transit_download_error: str | None = None
         transit_cache: dict[date, object] = {}
+        staging = TemporaryDirectory(prefix=".shahaf-stage-", dir=site_path.parent)
+        staged_students = Path(staging.name) / "students"
+        staged_students.mkdir()
         for profile in profile_views:
             profile_spec = profile_specs_by_id.get(str(profile.get("id")), {})
             if not profile_spec.get("managed_profile"):
@@ -824,7 +843,7 @@ def execute(
             profile_events = profile.get("events") if profile.get("events_available") else None
             if not managed:
                 continue
-            profile_output = site_path / "students" / str(profile.get("id"))
+            profile_output = staged_students / str(profile.get("id"))
             profile_wake_rules = (
                 root_wake_rules
                 if managed and str(profile.get("id")) == canonical_profile_id
@@ -858,8 +877,23 @@ def execute(
                 transit_wake=profile.get("transit_wake") if isinstance(profile.get("transit_wake"), dict) else None,
                 alarm_settings=profile_spec.get("alarm_settings") if managed and isinstance(profile_spec.get("alarm_settings"), dict) else None,
                 alarm_override=profile_spec.get("alarm_override") if managed and isinstance(profile_spec.get("alarm_override"), dict) else None,
+                alarm_overrides=profile_spec.get("alarm_overrides") if managed and isinstance(profile_spec.get("alarm_overrides"), list) else None,
                 wake_time_by_first_lesson_start=profile_wake_rules,
             )
+        # Do not publish an external calendar while profile rendering can still
+        # fail. Keep the known-good site and Gist together on staging failure.
+        if updated_content != gist_file.content and not dry_run:
+            client.update_file(config.gist_id, config.gist_filename, updated_content)
+        site_path.mkdir(parents=True, exist_ok=True)
+        backup = Path(staging.name) / "previous-students"
+        if managed_site_path.exists():
+            managed_site_path.rename(backup)
+        try:
+            staged_students.rename(managed_site_path)
+        except OSError:
+            if backup.exists():
+                backup.rename(managed_site_path)
+            raise
         print(f"Sync complete: {len(changes)} change(s), {len(exam_snapshot.exams)} exam(s); Gist write={'skipped' if dry_run else 'performed' if updated_content != gist_file.content else 'not needed'}")
         return changes
     except (GitHubError, CalendarFormatError, SyncFailure, ShahafSourceError, ValueError) as exc:
@@ -868,6 +902,9 @@ def execute(
         remove_profile_site(site_path / "ya1")
         print(f"SAFE FAILURE: {message}")
         raise SyncFailure(message) from exc
+    finally:
+        if staging is not None:
+            staging.cleanup()
 
 
 def main(argv: list[str] | None = None) -> int:

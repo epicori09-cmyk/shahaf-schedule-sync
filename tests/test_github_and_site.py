@@ -45,6 +45,20 @@ class FailingTransport:
 
 
 class GithubAndSiteTests(unittest.TestCase):
+    def test_upcoming_alarm_is_separate_from_todays_shortcut_alarm(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            render_site(output, title="Schedule", generated_at="2026-10-06T05:00:00+03:00", source_url="https://example.invalid", source_updated="fresh", changes=[], stale=False,
+                now=datetime(2026, 10, 6, 5, tzinfo=timezone(timedelta(hours=3))),
+                public_profile=True, profile_id="student-test", alarm_settings={"wake_buffer_minutes": 25},
+                schedule=[{"date": day, "start": "07:45", "period": 0, "subject": "Math"} for day in ("2026-10-06", "2026-10-07")],
+                alarm_overrides=[{"id": "cancel-tomorrow", "target_date": "2026-10-07", "action": "clear", "expires_at": "2026-10-07T20:59:59Z"}])
+            wake = json.loads((output / "wake.json").read_text(encoding="utf-8"))
+            self.assertEqual((wake["next_school_day"], wake["shortcut_action"], wake["wake_time"]), ("2026-10-06", "set", "07:20"))
+            self.assertEqual((wake["next_alarm"]["next_school_day"], wake["next_alarm"]["shortcut_action"]), ("2026-10-07", "clear"))
+            self.assertEqual(wake["next_alarm"]["alarm_baseline"]["wake_time"], "07:20")
+            self.assertEqual(wake["next_alarm"]["profile_id"], "student-test")
+
     def test_gist_client_reads_and_patches_only_selected_file(self) -> None:
         transport = FakeTransport()
         client = GistClient("secret-token", transport)
@@ -257,7 +271,7 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             service_worker = (output / "sw.js").read_text(encoding="utf-8")
             self.assertIn('"./data.json"', service_worker)
-            self.assertIn('CACHE_NAME = "shahaf-schedule-student-profile-v5"', service_worker)
+            self.assertIn('CACHE_NAME = "shahaf-schedule-student-profile-v6"', service_worker)
             self.assertIn("cache.put(request, response.clone())", service_worker)
 
     def test_service_worker_preserves_other_students_caches(self) -> None:
@@ -333,7 +347,8 @@ class GithubAndSiteTests(unittest.TestCase):
             )
             html = (output / "index.html").read_text(encoding="utf-8")
             self.assertIn("refreshDataInBackground", html)
-            self.assertIn('fetch(`./data.json?refresh=${Date.now()}`, {cache:"no-store"})', html)
+            self.assertIn('fetchJsonTimed(`./data.json?refresh=${Date.now()}`)', html)
+            self.assertIn('cache: "no-store", ...options, signal: controller.signal', html)
             self.assertIn('window.setTimeout(refreshDataInBackground, 0)', html)
 
     def test_every_rendered_page_has_installable_pwa_branding(self) -> None:
@@ -361,7 +376,7 @@ class GithubAndSiteTests(unittest.TestCase):
             self.assertIn('id="alarm-self-service"', html)
             self.assertIn('id="alarm-scheduled-time"', html)
             self.assertIn('"alarmScheduled": "Scheduled for"', html)
-            self.assertIn('let alarmState = activeProfile.wake || null;', html)
+            self.assertIn('let alarmState = upcomingAlarm(activeProfile.wake) || null;', html)
             self.assertIn('"alarm_baseline"', html)
             self.assertIn("Cancel / move my next alarm", html)
             self.assertIn('id="alarm-restore"', html)
@@ -378,7 +393,7 @@ class GithubAndSiteTests(unittest.TestCase):
                 self.assertEqual((output / f"icon-{size}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertTrue((output / "fonts" / "Heebo-400.ttf").exists())
             self.assertIn("fonts/Heebo-400.ttf", (output / "sw.js").read_text(encoding="utf-8"))
-            self.assertIn("-v5", (output / "sw.js").read_text(encoding="utf-8"))
+            self.assertIn("-v6", (output / "sw.js").read_text(encoding="utf-8"))
             self.assertNotIn('"./header-logo.png"', (output / "sw.js").read_text(encoding="utf-8"))
 
     def test_site_has_exam_view_and_four_day_reminder_metadata(self) -> None:

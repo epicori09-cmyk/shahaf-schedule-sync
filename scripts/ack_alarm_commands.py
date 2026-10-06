@@ -20,7 +20,9 @@ if not url or not token:
 try:
     payload = json.loads(args.profiles_file.read_text(encoding="utf-8"))
     profiles = payload.get("profiles", []) if isinstance(payload, dict) else []
-    ids = [str(item["alarm_override"]["id"]) for item in profiles if isinstance(item, dict) and isinstance(item.get("alarm_override"), dict) and item["alarm_override"].get("id")]
+    ids = sorted({str(command["id"]) for item in profiles if isinstance(item, dict)
+                  for command in (item.get("alarm_overrides") if isinstance(item.get("alarm_overrides"), list) else [item.get("alarm_override")])
+                  if isinstance(command, dict) and command.get("id")})
 except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
     raise SystemExit(f"could not read managed profile bundle: {exc}") from exc
 if not ids:

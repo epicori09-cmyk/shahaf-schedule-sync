@@ -16,8 +16,7 @@ url = os.environ.get("PROFILE_SYNC_URL", "")
 token = os.environ.get("PROFILE_SYNC_TOKEN", "")
 args.output.parent.mkdir(parents=True, exist_ok=True)
 if not url and not token:
-    args.output.write_text('{"profiles": []}\n', encoding="utf-8")
-    raise SystemExit(0)
+    raise SystemExit("Managed profile service is not configured; refusing to publish an empty bundle")
 if not url or not token:
     raise SystemExit("PROFILE_SYNC_URL and PROFILE_SYNC_TOKEN must be configured together")
 request = Request(

@@ -42,7 +42,7 @@ additive to the general architecture and safety rules in
 
 ## iPhone Shortcut contract
 
-The main Ori Shortcut uses the exact label `Shahaf School Wake` and follows
+The user-confirmed working Shortcut uses the exact label `Shahaf` and follows
 the endpoint's `shortcut_action`:
 
 - `leave`: stop before finding or deleting any alarm.
@@ -50,11 +50,34 @@ the endpoint's `shortcut_action`:
 - `set`: delete only the exact labeled alarm and create one normal Clock alarm
   using `wake_at`.
 
-Do not stop on `alarm_for_today = false`. On Friday or Saturday that value is
-normally false because `wake_at` points to Sunday; the returned date still
-needs to be created. The existing iPhone Shortcut must be edited manually to
-remove the `AlarmToday is No` stop block; the web app cannot edit a Shortcut on
-the phone.
+The root endpoint must return `clear` on fresh Friday/Saturday data, never
+`set` for a future Sunday alarm: iOS Clock alarms are time-only and could ring
+on the weekend. Stale data returns `leave`. The additive `next_alarm` object
+is a UI preview of the next school-day plan, not the Shortcut instruction.
+The root `shortcut_action` remains the authority. The web app cannot edit or
+confirm alarms in the phone's Clock app.
+
+## Alarm/retrieval reliability audit — 2026-10-06
+
+- Ori's special rule is pinned to `d1yQtOSfobdzGs0XfzJlNw`, not inferred
+  from the class number shared with other students. Absolute special times
+  are not rounded by normal buffer-rounding settings.
+- Nitay retains a 25-minute wake buffer. No student course choices were changed
+  by this audit.
+- Cancel/move/restore target the next scheduled school date. The alarm card
+  shows that date and time; `next_alarm` is its sanitized preview. The root
+  payload may still describe today's alarm before its wake time.
+- All active date-scoped commands are retained. Saving and restoring rotate
+  command versions so competing stale writes cannot replace confirmed state.
+- Worker wake responses check age, profile/date identity, current Israel
+  weekday, and elapsed wake timestamps. Stale data preserves the existing alarm.
+- Cancellation identity includes the selected teacher, subject, date and period.
+  Ambiguous identities preserve the previous timetable instead of guessing.
+- Source retrieval has bounded retries. Invalid profile bundles and failed
+  staged renders do not remove known-good student outputs. Cached JSON is
+  validated before replacement.
+- Browser controls refresh independently of cached page HTML, show loading and
+  transient success/error feedback, and retain the confirmed alarm on errors.
 
 ## Header branding
 

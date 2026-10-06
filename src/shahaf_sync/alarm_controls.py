@@ -7,9 +7,11 @@ Managed profiles receive an effective, already-resolved policy from the
 private Worker and publish only the small, safe subset needed by Shortcuts.
 """
 
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 import json
 import math
+import re
+from zoneinfo import ZoneInfo
 from typing import Any, Mapping
 
 
@@ -37,7 +39,7 @@ NO_LESSONS_POLICIES = {"clear", "leave"}
 def _clock(value: Any, field: str, *, allow_none: bool = True) -> str | None:
     if value is None and allow_none:
         return None
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{2}:\d{2}", value):
         raise ValueError(f"{field} must be HH:MM or null")
     try:
         parsed = time.fromisoformat(value)
@@ -181,8 +183,33 @@ def _override_is_active(override: Mapping[str, Any] | None, now: datetime) -> bo
         expiry = datetime.fromisoformat(expires.replace("Z", "+00:00"))
     except ValueError:
         return False
+    if expiry.tzinfo is None or override.get("consumed_at"):
+        return False
     current = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     return expiry >= current.astimezone(expiry.tzinfo or timezone.utc)
+
+
+def _covers_day(override: Mapping[str, Any], day: str) -> bool:
+    target = str(override.get("target_date") or "")
+    end = str(override.get("target_date_end") or target)
+    try:
+        return date.fromisoformat(target) <= date.fromisoformat(day) <= date.fromisoformat(end)
+    except ValueError:
+        return False
+
+
+def _weekend_guard(result: dict[str, Any], current: datetime, preview: bool) -> dict[str, Any]:
+    if result.get("shortcut_action") != "set":
+        return result
+    try:
+        target_weekend = date.fromisoformat(str(result.get("next_school_day"))).weekday() in {4, 5}
+    except ValueError:
+        target_weekend = True
+    if target_weekend or (not preview and current.weekday() in {4, 5}):
+        result["shortcut_action"] = "leave" if result.get("stale") else "clear"
+        result["enabled"] = False
+        result["fallback_status"] = "weekend"
+    return result
 
 
 def apply_alarm_controls(
@@ -190,12 +217,20 @@ def apply_alarm_controls(
     settings: Mapping[str, Any],
     *,
     override: Mapping[str, Any] | None = None,
+    overrides: list[Mapping[str, Any]] | None = None,
     now: datetime | None = None,
+    preview: bool = False,
 ) -> dict[str, Any]:
     """Apply managed-profile action policy without exposing admin metadata."""
 
     result = dict(wake)
-    current = now or datetime.now(timezone.utc)
+    zone = ZoneInfo("Asia/Jerusalem")
+    current = now or datetime.now(zone)
+    current = current.astimezone(zone) if current.tzinfo else current.replace(tzinfo=zone)
+    wake_date = str(result.get("next_school_day") or "")
+    candidates = [item for item in (overrides or ([override] if override else [])) if isinstance(item, Mapping) and _override_is_active(item, current)]
+    matching = [item for item in candidates if _covers_day(item, wake_date)]
+    override = max(matching, key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or ""))) if matching else None
     active_override = _override_is_active(override, current)
     target_date = str(override.get("target_date") or "") if override else ""
     target_date_end = str(override.get("target_date_end") or "") if override else ""
@@ -213,7 +248,7 @@ def apply_alarm_controls(
         "wake_buffer_minutes": int(settings.get("wake_buffer_minutes", 75)),
         "round_to_minutes": int(settings.get("round_to_minutes", 1)),
         "override_active": override_matches_day,
-        "override_pending": bool(active_override and not override_matches_day),
+        "override_pending": any(not _covers_day(item, wake_date) for item in candidates),
         "transit_min_arrival_margin": int(settings.get("transit_min_arrival_margin", 5)),
     }
 
@@ -228,13 +263,13 @@ def apply_alarm_controls(
             isinstance(restore_snapshot, Mapping)
             and restore_snapshot.get("next_school_day") == result.get("next_school_day")
             and (
-                str(override.get("action") or "") == "clear"
-                or str(override.get("wake_at") or "") == str(restore_snapshot.get("wake_at") or "")
+                str(override.get("action") or "") == "set"
+                and str(override.get("wake_at") or "") == str(restore_snapshot.get("wake_at") or "")
             )
         ):
             restore_action = str(restore_snapshot.get("shortcut_action") or "leave")
             unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}
-            restore_unsafe = bool(restore_snapshot.get("stale")) or str(restore_snapshot.get("fallback_status") or "") in unsafe_statuses
+            restore_unsafe = bool(result.get("stale")) or str(result.get("fallback_status") or "") in unsafe_statuses or bool(restore_snapshot.get("stale")) or str(restore_snapshot.get("fallback_status") or "") in unsafe_statuses
             # Restore is deliberately a time reset, not a replay of an older
             # clear/leave state. Only a safe original set alarm can be used
             # immediately; legacy or no-alarm snapshots fall through to the
@@ -242,7 +277,11 @@ def apply_alarm_controls(
             restore_valid = restore_action == "set"
             if restore_action == "set":
                 try:
-                    restore_valid = restore_valid and bool(restore_snapshot.get("wake_time")) and datetime.fromisoformat(str(restore_snapshot.get("wake_at", "")).replace("Z", "+00:00")) is not None
+                    restored_at = datetime.fromisoformat(str(restore_snapshot.get("wake_at", "")).replace("Z", "+00:00"))
+                    restore_valid = restore_valid and restored_at.tzinfo is not None
+                    if restore_valid:
+                        restored_at = restored_at.astimezone(zone)
+                        restore_valid = restored_at.date().isoformat() == wake_date and restored_at.strftime("%H:%M") == restore_snapshot.get("wake_time") and restored_at > current
                 except ValueError:
                     restore_valid = False
             if restore_valid and not restore_unsafe:
@@ -260,7 +299,7 @@ def apply_alarm_controls(
                 )
                 result["alarm_control"]["override_active"] = True
                 result["alarm_control"]["override_pending"] = False
-                return result
+                return _weekend_guard(result, current, preview)
         action = str(override.get("action") or "leave")
         target_date = override.get("target_date")
         unsafe_statuses = {"stale", "unavailable", "no-safe-route", "wake-time-bound"}
@@ -287,10 +326,12 @@ def apply_alarm_controls(
                 parsed = datetime.fromisoformat(wake_at.replace("Z", "+00:00"))
             except ValueError:
                 parsed = None
-            if parsed is not None:
+            if parsed is not None and parsed.tzinfo is not None:
+                parsed = parsed.astimezone(zone)
+            if parsed is not None and parsed.tzinfo is not None and parsed.date().isoformat() == wake_date and parsed > current:
                 result.update(
                     {
-                        "next_school_day": target_date or parsed.date().isoformat(),
+                        "next_school_day": parsed.date().isoformat(),
                         "wake_time": parsed.strftime("%H:%M"),
                         "wake_at": parsed.isoformat(),
                         "subject": override.get("subject") or result.get("subject"),
@@ -299,6 +340,9 @@ def apply_alarm_controls(
                         "fallback_status": "manual-set",
                     }
                 )
+            else:
+                result["shortcut_action"] = "leave"
+                result["fallback_status"] = "invalid-override-blocked"
         else:
             result["shortcut_action"] = "leave"
             result["fallback_status"] = "manual-leave"
@@ -313,7 +357,7 @@ def apply_alarm_controls(
         fallback_time = settings.get("fallback_wake_time")
         if target_date and fallback_time:
             try:
-                fallback_at = datetime.fromisoformat(f"{target_date}T{fallback_time}:00+03:00")
+                fallback_at = datetime.combine(date.fromisoformat(str(target_date)), time.fromisoformat(str(fallback_time))).replace(tzinfo=zone)
             except ValueError:
                 result["shortcut_action"] = "leave"
             else:
@@ -331,7 +375,7 @@ def apply_alarm_controls(
     elif result.get("fallback_status") == "no-lessons" and settings.get("no_lessons_policy", "clear") == "leave":
         result["shortcut_action"] = "leave"
 
-    return result
+    return _weekend_guard(result, current, preview)
 
 
 def public_alarm_settings(settings: Mapping[str, Any]) -> dict[str, Any]:

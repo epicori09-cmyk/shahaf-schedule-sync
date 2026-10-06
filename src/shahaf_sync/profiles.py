@@ -209,6 +209,52 @@ def _selector_matches(lesson: Lesson, selector: dict[str, Any]) -> bool:
     )
 
 
+def _change_matches_lesson(change: PublishedChange, lesson: Lesson) -> bool:
+    """Match a change to a dated lesson using only stable identity fields."""
+    if lesson.date != change.date or lesson.period != change.period:
+        return False
+    if change.subject and not _matches(lesson.subject, change.subject):
+        return False
+    if change.teacher and not _person_matches(lesson.teacher, change.teacher):
+        return False
+    # Rooms are deliberately not identity evidence: a change may move a
+    # lesson to a different room while still referring to the same lesson.
+    return True
+
+
+def _change_slot_matches(lessons: list[Lesson], change: PublishedChange) -> list[int]:
+    return [
+        index
+        for index, lesson_item in enumerate(lessons)
+        if lesson_item.date == change.date and lesson_item.period == change.period
+    ]
+
+
+def _change_candidate_matches(lessons: list[Lesson], change: PublishedChange) -> list[int]:
+    return [
+        index
+        for index in _change_slot_matches(lessons, change)
+        if _change_matches_lesson(change, lessons[index])
+    ]
+
+
+def _definite_change_matches(lessons: list[Lesson], change: PublishedChange) -> list[int]:
+    """Return one exact lesson index, or none when identity is ambiguous."""
+    matches = _change_candidate_matches(lessons, change)
+    return matches if len(matches) == 1 else []
+
+
+def change_matching_is_ambiguous(
+    lessons: list[Lesson], changes: list[PublishedChange]
+) -> bool:
+    """Report an applicable cancellation whose lesson identity is not unique."""
+    return any(
+        change.kind == "cancelled"
+        and len(_change_candidate_matches(lessons, change)) > 1
+        for change in changes
+    )
+
+
 def select_lessons(lessons: list[Lesson], spec: dict[str, Any]) -> list[Lesson]:
     """Select one profile's lessons from a whole-class Shahaf timetable."""
 
@@ -236,6 +282,25 @@ def select_lessons(lessons: list[Lesson], spec: dict[str, Any]) -> list[Lesson]:
 
 def _change_matches(change: PublishedChange, spec: dict[str, Any]) -> bool:
     shared = {_text(str(value)) for value in spec.get("shared_subjects", [])}
+    selected_lessons = spec.get("selected_lessons")
+    if change.kind == "cancelled" and isinstance(selected_lessons, list):
+        occurrence = [lesson for lesson in selected_lessons if isinstance(lesson, Lesson) and lesson.date == change.date and lesson.period == change.period]
+        if not any(_change_matches_lesson(change, lesson) for lesson in occurrence):
+            return False
+    if change.subject and change.teacher and isinstance(selected_lessons, list):
+        selected_occurrences = [
+            lesson_item
+            for lesson_item in selected_lessons
+            if isinstance(lesson_item, Lesson)
+            and lesson_item.date == change.date
+            and lesson_item.period == change.period
+            and _matches(lesson_item.subject, change.subject)
+        ]
+        if selected_occurrences and not any(
+            _person_matches(change.teacher, lesson_item.teacher)
+            for lesson_item in selected_occurrences
+        ):
+            return False
     if change.subject and _text(change.subject) in shared:
         return True
     # Some Shahaf rows describe a cancellation only by teacher and period.
@@ -266,7 +331,13 @@ def _change_matches(change: PublishedChange, spec: dict[str, Any]) -> bool:
             continue
         if change.teacher and teacher and not _person_matches(change.teacher, teacher):
             continue
-        if change.room and room and not _matches(change.room, room):
+        if (
+            change.room
+            and room
+            and not change.subject
+            and not change.teacher
+            and not _matches(change.room, room)
+        ):
             continue
         if change.subject or change.teacher or change.room:
             return True
@@ -290,12 +361,8 @@ def apply_changes(lessons: list[Lesson], changes: list[PublishedChange]) -> list
 
     result = list(lessons)
     for change in sorted(changes, key=lambda item: (item.date, item.period, item.kind)):
-        matches = [
-            index
-            for index, lesson in enumerate(result)
-            if lesson.date == change.date and lesson.period == change.period
-        ]
         if change.kind == "cancelled":
+            matches = _definite_change_matches(result, change)
             result = [
                 lesson
                 for index, lesson in enumerate(result)
@@ -316,6 +383,8 @@ def apply_changes(lessons: list[Lesson], changes: list[PublishedChange]) -> list
                 )
             )
             continue
+        slot_matches = _change_slot_matches(result, change)
+        matches = slot_matches if len(slot_matches) == 1 else _definite_change_matches(result, change)
         if not matches:
             continue
         index = matches[0]

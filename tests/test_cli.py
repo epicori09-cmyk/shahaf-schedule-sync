@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 import unittest
 
 from shahaf_sync.cli import Config, _canonical_managed_profile_id, _now, _stale_transit_payload, load_config
@@ -32,7 +33,7 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["stale"])
 
     def test_canonical_managed_profile_matches_only_the_main_class(self) -> None:
-        config = load_config(Path("config.json"))
+        config = replace(load_config(Path("config.json")), special_requests={})
         profiles = [
             {"id": "ori-random-id", "class_id": "11", "active": True},
             {"id": "other-random-id", "class_id": "61", "active": True},
@@ -44,7 +45,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(_canonical_managed_profile_id(profiles, specs, config), "ori-random-id")
 
     def test_canonical_managed_profile_with_multiple_candidates_is_not_guessed(self) -> None:
-        config = load_config(Path("config.json"))
+        config = replace(load_config(Path("config.json")), special_requests={})
         profiles = [
             {"id": "first-random-id", "class_id": "11", "active": True},
             {"id": "second-random-id", "class_id": "11", "active": True},
@@ -53,6 +54,15 @@ class CliTests(unittest.TestCase):
             "first-random-id": {"managed_profile": True, "class_number": 2},
             "second-random-id": {"managed_profile": True, "class_number": 2},
         }
+        self.assertIsNone(_canonical_managed_profile_id(profiles, specs, config))
+
+    def test_explicit_ori_identity_survives_other_students_in_the_same_class(self) -> None:
+        config = load_config(Path("config.json"))
+        ori = config.special_requests["profile_id"]
+        profiles = [{"id": name, "class_id": "11"} for name in (ori, "neta", "alma")]
+        specs = {name: {"managed_profile": True, "class_number": 2} for name in (ori, "neta", "alma")}
+        self.assertEqual(_canonical_managed_profile_id(profiles, specs, config), ori)
+        profiles[0]["active"] = False
         self.assertIsNone(_canonical_managed_profile_id(profiles, specs, config))
 
 

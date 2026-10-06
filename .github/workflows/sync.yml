@@ -64,7 +64,11 @@ jobs:
               shahaf = package.get("shahaf", {}) if isinstance(package, dict) else {}
               if str(shahaf.get("class_id")) == "11" and int(shahaf.get("class_number", 0)) == 2:
                   matches.append(str(record.get("public_id", "")))
-          if len(matches) == 1 and matches[0]:
+          config = json.loads(open("config.json", encoding="utf-8").read())
+          pinned = str(config.get("special_requests", {}).get("profile_id", ""))
+          if pinned and pinned in matches:
+              print(pinned)
+          elif not pinned and len(matches) == 1 and matches[0]:
               print(matches[0])
           PY
           )"
