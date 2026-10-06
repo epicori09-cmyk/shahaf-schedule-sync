@@ -521,6 +521,26 @@ async function adminFixture(overrides = []) {
   return { env, send };
 }
 
+test("Shortcut GET translates preserve to text false and accepts published false while keeping set/clear", async (t) => {
+  const { default: worker } = await loadWorker();
+  const originalFetch = global.fetch;
+  t.after(() => { global.fetch = originalFetch; });
+  const target = nextWeekdayDate(1);
+  for (const action of ["leave", "false", "set", "clear"]) {
+    const envelope = { profile_id: "student_123", generated_at: new Date().toISOString(), stale: false,
+      next_school_day: target, shortcut_action: action, fallback_status: "none", enabled: action === "set",
+      wake_at: action === "set" ? isoAtIsrael(target, "06:30") : null,
+      wake_time: action === "set" ? "06:30" : null };
+    global.fetch = async () => new Response(JSON.stringify({ ...envelope, next_alarm: { ...envelope, shortcut_action: action === "false" ? "leave" : action, alarm_control: {}, alarm_baseline: envelope } }));
+    const response = await worker.fetch(new Request("https://worker.example/public/profiles/student_123/wake.json"), publicCommandEnv());
+    assert.equal(response.status, 200, action);
+    const result = await response.json();
+    assert.equal(result.shortcut_action, ["leave", "false"].includes(action) ? "false" : action);
+    assert.equal(typeof result.shortcut_action, "string");
+    assert.equal(result.next_alarm.shortcut_action, action === "false" ? "leave" : action);
+  }
+});
+
 test("authenticated admin handler rejects null, missing command versions and covering ranges without mutation", async () => {
   const { default: worker, publicAlarmCommandVersion } = await loadWorker();
   const targetDate = nextWeekdayDate(1);
