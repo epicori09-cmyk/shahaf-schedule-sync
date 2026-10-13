@@ -11,7 +11,8 @@ import unittest
 from shahaf_sync import cli
 from shahaf_sync.github import GistFile
 from shahaf_sync.model import EventSnapshot, ExamSnapshot, ShahafEvent, SourceSnapshot
-from shahaf_sync.nim import EventSafetyDecision
+from shahaf_sync.nim import EventSafetyDecision, NimError
+from shahaf_sync.site import render_site
 
 
 ICS = """BEGIN:VCALENDAR\r
@@ -61,6 +62,43 @@ class NoCallNim:
 
 
 class CliEventIntegrationTests(unittest.TestCase):
+    def test_future_timeout_does_not_block_today_or_undo_other_dates(self):
+        from unittest.mock import Mock
+        current = datetime(2026, 10, 13, 5, tzinfo=ZoneInfo("Asia/Jerusalem"))
+        lessons = [{"date": day, "period": 1, "subject": "Math", "start": "08:30", "end": "09:10"}
+                   for day in ("2026-10-13", "2026-11-03", "2026-12-22")]
+        events = [ShahafEvent(date(2026, 11, 3), "יום למידה א-סינכרוני", start_period=0, end_period=14, class_numbers=(2,)),
+                  ShahafEvent(date(2026, 12, 22), "למידה א-סינכרונית", start_period=0, end_period=14, class_numbers=(2,))]
+        model = Mock()
+        model.classify_event.side_effect = NimError("review timed out")
+        result = cli._process_events(snapshot=EventSnapshot(events, "fresh", "events"), schedule=lessons,
+                                     exams=[], class_number=2, current=current, profile_id="fixture_student", nim_client=model)
+        self.assertEqual([row["date"] for row in result.schedule], ["2026-10-13", "2026-12-22"])
+        with TemporaryDirectory() as directory:
+            render_site(Path(directory), title="Fixture", generated_at=current.isoformat(), source_url="https://example.invalid",
+                        source_updated="fresh", changes=[], stale=False, schedule=result.schedule, now=current,
+                        profile_id="fixture_student", public_profile=True, alarm_safety=result.alarm_safety,
+                        alarm_safety_reason=result.alarm_safety_reason, alarm_safety_by_date=result.alarm_safety_by_date)
+            wake = json.loads((Path(directory) / "wake.json").read_text(encoding="utf-8"))
+            self.assertEqual(wake["shortcut_action"], "set")
+            self.assertEqual(wake["alarm_safety"], "not-required")
+            self.assertEqual(wake["next_alarm"]["shortcut_action"], "leave")
+
+    def test_uncertain_event_on_target_day_still_preserves_alarm(self):
+        from unittest.mock import Mock
+        current = datetime(2026, 10, 13, 5, tzinfo=ZoneInfo("Asia/Jerusalem"))
+        model = Mock()
+        model.classify_event.side_effect = NimError("review timed out")
+        result = cli._process_events(snapshot=EventSnapshot([ShahafEvent(current.date(), "למידה א-סינכרונית", start_period=0, end_period=14, class_numbers=(2,))], "fresh", "events"),
+            schedule=[{"date": "2026-10-13", "period": 1, "subject": "Math", "start": "08:30", "end": "09:10"}],
+            exams=[], class_number=2, current=current, profile_id="fixture_student", nim_client=model)
+        with TemporaryDirectory() as directory:
+            render_site(Path(directory), title="Fixture", generated_at=current.isoformat(), source_url="https://example.invalid",
+                source_updated="fresh", changes=[], stale=False, schedule=result.schedule, now=current,
+                profile_id="fixture_student", public_profile=True, alarm_safety=result.alarm_safety,
+                alarm_safety_by_date=result.alarm_safety_by_date)
+            self.assertEqual(json.loads((Path(directory) / "wake.json").read_text())["shortcut_action"], "false")
+
     def test_install_or_gist_failure_preserves_previous_students(self) -> None:
         config = cli.Config("Asia/Jerusalem", "https://example.invalid/", "11", "gist", "school.ics", 21, "Schedule", "site", class_number=2)
         event = ShahafEvent(date(2026, 9, 9), "יום למידה א-סינכרוני", start_period=0, end_period=14, class_numbers=(2,))
