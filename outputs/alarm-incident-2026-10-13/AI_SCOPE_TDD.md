@@ -42,4 +42,37 @@ must still preserve, and irrelevant out-of-window events must not call AI.
   64%, combined 73% (below skill 80% module target; not claimed passed).
   New scoped behaviors have direct runtime regressions, not just string checks.
 
-Deployment and live checks pending below.
+## Deployment and live verification
+
+- Fix commit ffecd69 pushed; Pages/sync run 38454306823 SUCCESS in 41s.
+  No Worker production source changed in this patch; existing Worker reads
+  new published roots and preserves its freshness/time-only guards.
+- verify_live.ps1 exit 0: all six Worker/Pages profiles fresh, identity and
+  command versions correct, buffers preserved and roots set for October 14.
+  Ori 06:45; Nitay 07:20; Jonathan 07:15; Shahar/Neta/Alma 06:30.
+- User ran Ori's Shortcut after publication and explicitly confirmed creation
+  of the 06:45 alarm. This is phone creation evidence for one profile, NOT
+  proof it rang or that every student's device works.
+- Website Load failed remains un-reproduced: read-only panel and CORS checks
+  succeeded, no production cancel command was issued. Screenshot/request
+  evidence needed. Sparse scheduled runs/freshness remain unresolved; not
+  fixed by moving AI uncertainty to the correct date.
+
+## Self-evaluation
+
+Summary: 3.8/5. Requested AI regression repaired and deployed; broader alarm
+incident is not fully closed.
+
+| Axis | Score | Evidence and improvement |
+|---|---|---|
+| Accuracy | 4 | Historical artifact establishes five blocked feeds; 247 Python/25 Node pass; six live feeds and one user-confirmed phone creation. Do not extrapolate ringing evidence. |
+| Completeness | 3 | AI scope/timeout cause fixed; website Load failed and sparse scheduler unresolved. Obtain the failed request and repair scheduling independently. |
+| Clarity | 4 | Separate server generation, current feed and phone confirmation recorded; keep the final reply focused on what is fixed versus still open. |
+| Actionability | 4 | Deployed patch, same URLs, Ori manual run confirmed; next useful evidence is screenshot/request for cancellation failure. |
+| Conciseness | 4 | Narrow date-scoped implementation avoids globally weakening safety; report is longer than user-facing summary. |
+
+Overall 3.8/5; no axis <=2. Improvements: capture cancellation request failure;
+establish reliable sync cadence; broaden CLI module coverage (currently 64%).
+Self-check: the user can see the AI issue was real and repaired, but should
+not accept a blanket all-alarms-working claim with scheduler gaps still open.
+Verdict: deliver bounded fix with explicit unresolved incident items.
