@@ -399,6 +399,7 @@ def build_wake_data(
     now: datetime | None = None,
     alarm_safety: str | None = None,
     alarm_safety_reason: str = "",
+    alarm_safety_by_date: dict[str, str] | None = None,
     buffer_minutes: int = 75,
     min_wake_time: str | None = None,
     max_wake_time: str | None = None,
@@ -410,6 +411,10 @@ def build_wake_data(
 ) -> dict[str, Any]:
     """Build the safe, master-profile-only input for the iPhone Shortcut."""
 
+    if alarm_safety == "blocked" and alarm_safety_by_date is not None:
+        # Known event uncertainty is date-local, not a global source failure.
+        alarm_safety = "not-required"
+        alarm_safety_reason = "No uncertain event affects this alarm date."
     base: dict[str, Any] = {
         "next_school_day": None,
         "next_scheduled_school_day": None,
@@ -544,7 +549,9 @@ def build_wake_data(
                 "shortcut_action": "clear" if today.weekday() in ISRAEL_WEEKEND_WEEKDAYS else "set",
             }
         )
-        if alarm_safety not in (None, "approved", "not-required"):
+        if school_day.isoformat() in (alarm_safety_by_date or {}):
+            base.update(alarm_safety="blocked", alarm_safety_reason=alarm_safety_by_date[school_day.isoformat()], shortcut_action="leave")
+        elif alarm_safety not in (None, "approved", "not-required"):
             # The AI is a deletion/replacement gate. Any missing, failed, or
             # ambiguous review preserves the current labeled alarm.
             base["shortcut_action"] = "leave"
@@ -552,6 +559,8 @@ def build_wake_data(
 
     base["fallback_status"] = "no-lessons"
     base["shortcut_action"] = "clear" if no_lessons_policy == "clear" else "leave"
+    if today.isoformat() in (alarm_safety_by_date or {}):
+        base.update(alarm_safety="blocked", alarm_safety_reason=alarm_safety_by_date[today.isoformat()], shortcut_action="leave")
     if alarm_safety not in (None, "approved", "not-required"):
         base["shortcut_action"] = "leave"
     return base
@@ -577,6 +586,7 @@ def render_site(
     now: datetime | None = None,
     alarm_safety: str | None = None,
     alarm_safety_reason: str = "",
+    alarm_safety_by_date: dict[str, str] | None = None,
     profile_id: str = "master",
     profile_label: str = "Master profile — יא-2",
     profile_mark: str = "XI·2",
@@ -657,6 +667,7 @@ def render_site(
             now=now,
             alarm_safety=alarm_safety,
             alarm_safety_reason=alarm_safety_reason,
+            alarm_safety_by_date=alarm_safety_by_date,
             buffer_minutes=int((alarm_settings or {}).get("wake_buffer_minutes", 75)),
             min_wake_time=(alarm_settings or {}).get("min_wake_time"),
             max_wake_time=(alarm_settings or {}).get("max_wake_time"),
@@ -719,6 +730,7 @@ def render_site(
                     schedule_data, schedule_available=schedule is not None, stale=stale,
                     now=current.replace(hour=23, minute=59, second=59),
                     alarm_safety=alarm_safety, alarm_safety_reason=alarm_safety_reason,
+                    alarm_safety_by_date=alarm_safety_by_date,
                     buffer_minutes=int((alarm_settings or {}).get("wake_buffer_minutes", 75)),
                     min_wake_time=(alarm_settings or {}).get("min_wake_time"),
                     max_wake_time=(alarm_settings or {}).get("max_wake_time"),
@@ -730,7 +742,7 @@ def render_site(
                 )
                 # Planning a Sunday alarm on a weekend is fine for display;
                 # the Shortcut root remains protected against weekend rings.
-                if next_baseline.get("fallback_status") == "none" and next_baseline.get("wake_at") and alarm_safety in (None, "approved", "not-required"):
+                if next_baseline.get("fallback_status") == "none" and next_baseline.get("wake_at") and next_baseline.get("alarm_safety") in (None, "approved", "not-required"):
                     next_baseline["shortcut_action"] = "set"
             else:
                 next_baseline = {"next_school_day": alarm_baseline.get("next_scheduled_school_day"), "shortcut_action": "leave", "enabled": False, "stale": stale, "fallback_status": "no-safe-route"}

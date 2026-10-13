@@ -257,6 +257,7 @@ class EventProcessing:
     decisions: dict[tuple[object, ...], object]
     alarm_safety: str
     alarm_safety_reason: str
+    alarm_safety_by_date: dict[str, str] | None = None
 
 
 def _process_events(
@@ -274,6 +275,7 @@ def _process_events(
     relevant = [event for event in snapshot.events if event.applies_to_class(class_number)]
     decisions: dict[tuple[object, ...], object] = {}
     blocked_reasons: list[str] = []
+    blocked_dates: dict[str, str] = {}
     approved_reasons: list[str] = []
     for event in relevant:
         if not event_requires_review(event):
@@ -293,6 +295,11 @@ def _process_events(
                 "low",
                 "Shahaf explicitly marks this date as an asynchronous learning day with no in-person school.",
             )
+        elif event.date != current.date() and not lessons_on_date and not exams_on_date:
+            # Far-future/past events with no published attendance cannot
+            # affect this plan. Keep uncertainty visible, but defer costly
+            # review until the date actually enters the attendance window.
+            decision = EventSafetyDecision("uncertain", False, "high", "Review deferred: no attendance or exam on this date in the published window.")
         elif nim_client is None:
             decision: object = EventSafetyDecision(
                 "uncertain",
@@ -318,16 +325,18 @@ def _process_events(
             approved_reasons.append(f"{event.title}: {decision.reason}")
         elif str(getattr(decision, "classification", "uncertain")) in {"uncertain", "no_school", "remote_learning"}:
             blocked_reasons.append(f"{event.title}: {decision.reason}")
+            blocked_dates[event_date] = (blocked_dates.get(event_date, "") + f" {event.title}: {decision.reason}").strip()
 
     filtered_schedule = apply_event_decisions(schedule, relevant, decisions)
     serialized = [event_to_dict(event, decisions.get(event_key(event))) for event in relevant]
     if blocked_reasons:
         return EventProcessing(
             serialized,
-            filtered_schedule if not blocked_reasons else schedule,
+            filtered_schedule,
             decisions,
             "blocked",
             "Event review required: " + " | ".join(blocked_reasons),
+            blocked_dates,
         )
     if approved_reasons:
         return EventProcessing(
@@ -528,6 +537,7 @@ def _build_public_profile(
         "events_source_updated": events_snapshot.update_text,
         "events_alarm_safety": event_processing.alarm_safety,
         "events_alarm_safety_reason": event_processing.alarm_safety_reason,
+        "events_alarm_safety_by_date": event_processing.alarm_safety_by_date,
         "source_url": source_url,
         "source_updated": update_text or changes_snapshot.update_text,
         "last_successful_sync": current.isoformat(),
@@ -880,6 +890,7 @@ def execute(
                 now=current,
                 alarm_safety=str(profile.get("events_alarm_safety", "not-required")),
                 alarm_safety_reason=str(profile.get("events_alarm_safety_reason", "")),
+                alarm_safety_by_date=profile.get("events_alarm_safety_by_date"),
                 profile_id=str(profile.get("id", "profile")),
                 profile_label="Student schedule",
                 profile_mark="STUDENT",

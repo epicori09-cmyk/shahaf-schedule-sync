@@ -97,7 +97,17 @@ class CliEventIntegrationTests(unittest.TestCase):
                 source_updated="fresh", changes=[], stale=False, schedule=result.schedule, now=current,
                 profile_id="fixture_student", public_profile=True, alarm_safety=result.alarm_safety,
                 alarm_safety_by_date=result.alarm_safety_by_date)
-            self.assertEqual(json.loads((Path(directory) / "wake.json").read_text())["shortcut_action"], "false")
+            self.assertEqual(json.loads((Path(directory) / "wake.json").read_text(encoding="utf-8"))["shortcut_action"], "false")
+
+    def test_event_outside_attendance_window_does_not_call_model(self):
+        from unittest.mock import Mock
+        model = Mock()
+        model.classify_event.side_effect = NimError("review timed out")
+        result = cli._process_events(snapshot=EventSnapshot([ShahafEvent(date(2026, 12, 22), "למידה א-סינכרונית", start_period=0, end_period=14, class_numbers=(2,))], "fresh", "events"),
+            schedule=[{"date": "2026-10-13", "period": 1, "subject": "Math", "start": "08:30", "end": "09:10"}],
+            exams=[], class_number=2, current=datetime(2026, 10, 13, 5, tzinfo=ZoneInfo("Asia/Jerusalem")), profile_id="fixture", nim_client=model)
+        model.classify_event.assert_not_called()
+        self.assertEqual(result.events[0]["classification"], "uncertain")
 
     def test_install_or_gist_failure_preserves_previous_students(self) -> None:
         config = cli.Config("Asia/Jerusalem", "https://example.invalid/", "11", "gist", "school.ics", 21, "Schedule", "site", class_number=2)
