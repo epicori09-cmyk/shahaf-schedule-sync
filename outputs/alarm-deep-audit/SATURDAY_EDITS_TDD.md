@@ -23,7 +23,11 @@ when attempting Move/Restore targeting Friday or Saturday. Both outcomes of
 each changed validation check are exercised. Whole-Worker coverage percentage
 was not measured; no 80% module coverage claim.
 
-Deployment: pending.
+Deployment: fix commit 12a2198 pushed to main. Wrangler deploy exit 0;
+Worker version 02fe106d-090a-4caf-82ee-105b545f083c. Read-only live Nitay feed
+HTTP 200 with matching profile and supported action. No Pages rendering
+changes; no student alarm mutations. Saturday command acceptance verified
+in frozen-date handler fixtures, not by changing production alarms.
 
 ## Self-evaluation
 
