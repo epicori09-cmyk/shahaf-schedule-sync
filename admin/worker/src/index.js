@@ -1231,7 +1231,7 @@ export default {
       if (!overrideVersionMatches(body, existingOverride)) return json({ error: "alarm command changed; refresh and try again" }, 409, cors);
       if (action === "restore") {
         if (!existingOverride) return json({ error: "There is no active alarm change to restore." }, 409, cors);
-        if (israelIsWeekendDate(today.date) || israelIsWeekendDate(targetDate)) return json({ error: "Alarms cannot be restored through the fast feed on Friday or Saturday." }, 400, cors);
+        if (israelIsWeekendDate(targetDate)) return json({ error: "Alarms cannot be restored for Friday or Saturday." }, 400, cors);
         const restoreJson = await alarmRestoreSnapshot(env, publicId, targetDate, existingOverride, { wake: publicWake, requireFreshBaseline: true });
         const restoreSnapshot = parseStoredJson(restoreJson, null);
         if (!restoreSnapshot || !["set", "clear", "leave"].includes(String(restoreSnapshot.shortcut_action || ""))) {
@@ -1255,7 +1255,7 @@ export default {
       let wakeAt = null;
       let wakeTime = null;
       if (action === "set") {
-        if (israelIsWeekendDate(today.date) || israelIsWeekendDate(targetDate)) return json({ error: "Alarms cannot be set through the fast feed on Friday or Saturday." }, 400, cors);
+        if (israelIsWeekendDate(targetDate)) return json({ error: "Alarms cannot be set for Friday or Saturday." }, 400, cors);
         wakeTime = String(body?.wake_time || "");
         if (!validClock(wakeTime, false)) return json({ error: "wake_time must use HH:MM" }, 400, cors);
         if (targetDate === today.date && Number(wakeTime.slice(0, 2)) * 60 + Number(wakeTime.slice(3)) <= today.minutes) {

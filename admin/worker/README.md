@@ -74,6 +74,11 @@ commands or commands overlapping an active pause window return `409` without
 changing the window. Friday and Saturday target
 dates remain protected by the normal no-weekend alarm logic.
 
+Editing on Saturday is allowed for a Sunday alarm, including Move and
+Restore. The edit restriction checks the alarm's target date, not today's
+weekday. The separate live-feed guard still prevents a time-only iPhone
+Clock alarm from ringing on Friday or Saturday.
+
 The API supports preview, bulk pause/resume/reset/set/clear/leave
 commands, per-profile settings, expiring date overrides, audit history, and
 settings rollback. A force command requires an explicit reason and

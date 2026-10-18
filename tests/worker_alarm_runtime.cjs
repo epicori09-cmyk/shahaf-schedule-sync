@@ -441,7 +441,7 @@ test("Saturday edits accept Sunday move and restore but cannot make Clock ring o
   const baseline = { next_school_day: targetDate, shortcut_action: "set", enabled: true, stale: false,
     wake_at: `${targetDate}T06:45:00+03:00`, wake_time: "06:45", fallback_status: "none" };
   const wake = { profile_id: "student_123", generated_at: new Date().toISOString(), stale: false,
-    shortcut_action: "clear", next_school_day: targetDate, next_scheduled_school_day: targetDate, wake_at: null, wake_time: null,
+    shortcut_action: "clear", next_school_day: targetDate, next_scheduled_school_day: targetDate, wake_at: null, wake_time: null, alarm_baseline: baseline,
     next_alarm: { ...baseline, profile_id: "student_123", generated_at: new Date().toISOString(), alarm_baseline: baseline, alarm_control: {} } };
   global.fetch = async () => new Response(JSON.stringify(wake));
   for (const action of ["set", "restore", "clear"]) {
@@ -461,6 +461,20 @@ test("Saturday edits accept Sunday move and restore but cannot make Clock ring o
   }
   for (const date of ["2026-10-23", "2026-10-24"]) {
     assert.notEqual(applyPublicAlarmOverride({ ...baseline, next_school_day: date, wake_at: `${date}T07:00:00+03:00` }, [], new Date()).shortcut_action, "set");
+    const empty = { ...baseline, next_school_day: date, shortcut_action: "clear", wake_at: null, wake_time: null, enabled: false };
+    global.fetch = async () => new Response(JSON.stringify({ ...wake, next_school_day: date, next_scheduled_school_day: date,
+      next_alarm: { ...empty, profile_id: "student_123", generated_at: new Date().toISOString(), alarm_control: {}, alarm_baseline: empty } }));
+    for (const action of ["set", "restore"]) {
+      const rows = action === "restore" ? [{ id: "cancel", profile_id: "p1", target_date: date, action: "clear", expires_at: "2026-10-25T00:00:00Z" }] : [];
+      const env = publicCommandEnv(rows);
+      const response = await worker.fetch(new Request("https://worker.example/public/profiles/student_123/alarm-command", {
+        method: "POST", headers: { Origin: "https://school.example", "Content-Type": "application/json" },
+        body: JSON.stringify({ action, target_date: date, wake_time: "07:00", command_version: await publicAlarmCommandVersion("p1", date, rows) }),
+      }), env);
+      assert.equal(response.status, 400);
+      assert.match((await response.json()).error, /for Friday or Saturday/);
+      assert.equal(env.__state.mutations, 0);
+    }
   }
 });
 

@@ -18,6 +18,7 @@ class AdminContractTests(unittest.TestCase):
             self.assertIn(f'value="{major}"', source)
         for control in ("PBKDF2", "HttpOnly", "SameSite=Strict", "X-CSRF-Token", "ADMIN_ORIGIN", "rateLimit", "workerSiteURL", "Permanently delete this profile", "Alarm control center", "Force this change (advanced)", "Restore this version", "route_alternatives", "published_at", "restore_json", "alarm_baseline", "action must be clear, set, or restore", "alarm-command-restore", "correct-original-time", "correct original alarm time", "nextPublicAlarmDate", "next_scheduled_school_day", "next_school_day", "choose a future time for the next alarm", "Alarms cannot be set through the fast feed on Friday or Saturday.", "Alarms cannot be restored through the fast feed on Friday or Saturday.", "israelIsWeekendDate", "public-alarm-feed", "alarm feed rate limit reached", "WHERE public_id=?1 AND active=1", "Student self-service alarm change", 'source: "public-profile"', "alarm_overrides", "publish_status", "effectivePublicWake", "persistAlarmOverride"):
             expected = "Student restored the current alarm baseline" if control == "correct original alarm time" else control
+            expected = expected.replace("through the fast feed on Friday or Saturday.", "for Friday or Saturday.")
             self.assertIn(expected, source)
         self.assertIn("GITHUB_DISPATCH_TOKEN", source)
         self.assertNotIn("GIST_TOKEN", source)
