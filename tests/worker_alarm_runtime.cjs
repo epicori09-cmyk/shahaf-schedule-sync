@@ -324,11 +324,16 @@ function publicCommandEnv(overrides = []) {
           async all() {
             if (/FROM alarm_overrides/.test(query)) {
               pendingReads += 1;
-              return { results: pendingReads > 1 && persisted ? [...overrides, persisted] : overrides };
+              return { results: pendingReads > 1 && persisted ? [...overrides.filter((item) => item.target_date !== persisted.target_date), persisted] : overrides };
             }
             throw new Error(`unexpected all SQL: ${query}`);
           },
           async run() {
+            if (/UPDATE alarm_overrides SET id=/.test(query)) {
+              state.mutations += 1;
+              persisted = { id: values[0], profile_id: values[9], target_date: values[12], action: values[1], wake_at: values[2], reason: values[4], expires_at: values[6] };
+              return { meta: { changes: 1 } };
+            }
             if (/INSERT INTO alarm_overrides/.test(query)) {
               state.mutations += 1;
               persisted = { id: values[0], profile_id: values[1], target_date: values[2], action: values[3], wake_at: values[4], expires_at: values[9] };
@@ -420,6 +425,43 @@ test("public command responses carry the effective wake and accept persisted pub
   assert.match(workerSource, /publish_status/);
   assert.match(workerSource, /wake:\s*shortcutWirePayload\(await effectivePublicWake/);
   assert.doesNotMatch(workerSource, /alarm change was saved, but publishing is temporarily unavailable[\s\S]{0,80}503/);
+});
+
+test("Saturday edits accept Sunday move and restore but cannot make Clock ring on Saturday", async (t) => {
+  const OriginalDate = global.Date;
+  class SaturdayDate extends OriginalDate {
+    constructor(...args) { super(...(args.length ? args : ["2026-10-17T12:00:00+03:00"])); }
+    static now() { return new OriginalDate("2026-10-17T12:00:00+03:00").getTime(); }
+  }
+  global.Date = SaturdayDate;
+  const originalFetch = global.fetch;
+  t.after(() => { global.Date = OriginalDate; global.fetch = originalFetch; });
+  const { default: worker, publicAlarmCommandVersion, applyPublicAlarmOverride } = await loadWorker();
+  const targetDate = "2026-10-18";
+  const baseline = { next_school_day: targetDate, shortcut_action: "set", enabled: true, stale: false,
+    wake_at: `${targetDate}T06:45:00+03:00`, wake_time: "06:45", fallback_status: "none" };
+  const wake = { profile_id: "student_123", generated_at: new Date().toISOString(), stale: false,
+    shortcut_action: "clear", next_school_day: targetDate, next_scheduled_school_day: targetDate, wake_at: null, wake_time: null,
+    next_alarm: { ...baseline, profile_id: "student_123", generated_at: new Date().toISOString(), alarm_baseline: baseline, alarm_control: {} } };
+  global.fetch = async () => new Response(JSON.stringify(wake));
+  for (const action of ["set", "restore", "clear"]) {
+    const rows = action === "restore" ? [{ id: "old-cancel", profile_id: "p1", target_date: targetDate, action: "clear", expires_at: "2026-10-19T00:00:00Z" }] : [];
+    const env = publicCommandEnv(rows);
+    const response = await worker.fetch(new Request("https://worker.example/public/profiles/student_123/alarm-command", {
+      method: "POST", headers: { Origin: "https://school.example", "Content-Type": "application/json" },
+      body: JSON.stringify({ action, target_date: targetDate, wake_time: "07:00", command_version: await publicAlarmCommandVersion("p1", targetDate, rows) }),
+    }), env);
+    assert.equal(response.status, 202, `${action}: ${response.status}`);
+    const result = await response.json();
+    assert.equal(result.target_date, targetDate);
+    assert.equal(result.wake.next_alarm.shortcut_action, action === "clear" ? "clear" : "set");
+    assert.equal(result.wake.next_alarm.wake_time, action === "restore" ? "06:45" : action === "set" ? "07:00" : null);
+    assert.notEqual(result.wake.shortcut_action, "set");
+    assert.equal(env.__state.mutations, 2);
+  }
+  for (const date of ["2026-10-23", "2026-10-24"]) {
+    assert.notEqual(applyPublicAlarmOverride({ ...baseline, next_school_day: date, wake_at: `${date}T07:00:00+03:00` }, [], new Date()).shortcut_action, "set");
+  }
 });
 
 test("public POST requires preview date/version and rejects overlapping ranges before mutation", () => {
