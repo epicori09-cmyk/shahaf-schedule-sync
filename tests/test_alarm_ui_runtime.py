@@ -551,6 +551,7 @@ async function cachedDataThenWorker(html) {
 
 async function slowPreCommandGet(html) {
   const app = boot(html);
+  app.runtime.alarmState.alarm_control = { command_version: "previously-confirmed-version" };
   const oldRefresh = app.runtime.refreshAlarmState();
   expectEqual(app.network.requests.length, 1, "pre-command alarm GET starts");
 
@@ -599,6 +600,7 @@ async function leaveIsPreserved(html) {
 
 async function actionErrorAndTimeout(html) {
   const app = boot(html);
+  app.runtime.alarmState.alarm_control = { command_version: "previously-confirmed-version" };
   app.document.byId("alarm-self-service-toggle").click();
   app.document.byId("alarm-move-time").value = "08:00";
   app.document.byId("alarm-move-today").click();
@@ -666,9 +668,22 @@ async function unavailableVersionStops(html) {
   expectFalse(alarmFeedback(app).text.includes("command_version"), "internal field name is not shown");
 }
 
+async function changedTargetStops(html) {
+  const app = boot(html);
+  app.document.byId("alarm-cancel-today").click();
+  await flush();
+  app.network.respond(0, wake("student-profile", "07:15", "set", {
+    next_school_day: "2026-10-08", alarm_control: { command_version: "new-day-version" }
+  }));
+  await flush();
+  expectFalse(app.network.requests.some(r => r.options.method === "POST"), "changed target is never silently cancelled");
+  expectTrue(alarmFeedback(app).text.includes("review"), "updated date requires user review");
+}
+
 const scenarios = {
   missing_version_preflight: missingVersionPreflight,
   unavailable_version_stops: unavailableVersionStops,
+  changed_target_stops: changedTargetStops,
   cached_data_then_worker: cachedDataThenWorker,
   slow_pre_command_get: slowPreCommandGet,
   mismatched_and_older_refreshes: mismatchedAndOlderRefreshes,
@@ -807,6 +822,9 @@ class AlarmUiRuntimeTests(unittest.TestCase):
 
     def test_stale_tokenless_feed_prevents_post_and_shows_friendly_error(self) -> None:
         self.run_runtime("unavailable_version_stops")
+
+    def test_changed_target_requires_review_without_silent_cancel(self) -> None:
+        self.run_runtime("changed_target_stops")
 
     def test_slow_pre_command_get_cannot_overwrite_newer_command_state(self) -> None:
         self.run_runtime("slow_pre_command_get")

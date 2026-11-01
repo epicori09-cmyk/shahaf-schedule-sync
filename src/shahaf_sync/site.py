@@ -87,7 +87,7 @@ def _write_pwa_assets(output_dir: Path, title: str, profile_id: str, *, pink: bo
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     cache_prefix = f"shahaf-schedule-{safe_profile_id}-"
-    cache_name = f"{cache_prefix}v7"
+    cache_name = f"{cache_prefix}v8"
     service_worker = f'''const CACHE_NAME = {json.dumps(cache_name)};
 const CACHE_PREFIX = {json.dumps(cache_prefix)};
 const PROFILE_ID = {json.dumps(profile_id)};
@@ -815,6 +815,8 @@ def render_site(
             "cancelTodayAlarm": "Cancel my next alarm", "moveAlarmTo": "Move my next alarm to", "moveAlarm": "Move alarm", "restoreAlarm": "Restore correct time",
             "alarmConfirmCancel": "Cancel this schedule’s next alarm?", "alarmConfirmMove": "Move this schedule’s next alarm to {time}?", "alarmConfirmRestore": "Restore this schedule’s alarm to its correct original time?", "alarmSaving": "Saving next alarm change…",
             "alarmCancelQueued": "Next alarm cancellation is queued. Run the Shahaf Shortcut to apply it immediately.", "alarmMoveQueued": "Next alarm move is queued. Run the Shahaf Shortcut to apply it immediately.", "alarmRestoreQueued": "Restore is queued. Run the Shahaf Shortcut to apply the correct original alarm time.",
+            "alarmStateUnavailable": "The latest alarm status is unavailable. Please refresh the page and try again shortly.",
+            "alarmStateChanged": "The next alarm has changed. Please review its updated date and try again.",
             "alarmError": "The alarm change could not be submitted. Please try again.", "alarmFutureTime": "Choose a future time for the next alarm.",
             "alarmPreserved": "Current alarm preserved", "alarmCancelled": "Cancelled", "alarmUnconfirmed": "Could not confirm the change. Refresh the alarm status before trying again.", "syncChecking": "Checking for updates…", "syncAge": "Last school sync: {time}", "syncOld": "School data needs a refresh",
             "privatePage": "Private page", "enterYa1Schedule": "Enter Ya1 schedule", "typePhrase": "Type the access phrase to continue.",
@@ -839,6 +841,8 @@ def render_site(
             "cancelTodayAlarm": "ביטול ההתראה הבאה שלי", "moveAlarmTo": "שינוי ההתראה הבאה שלי לשעה", "moveAlarm": "שינוי ההתראה", "restoreAlarm": "שחזור לשעה הנכונה",
             "alarmConfirmCancel": "לבטל את ההתראה הבאה של המערכת הזו?", "alarmConfirmMove": "לשנות את ההתראה הבאה של המערכת הזו לשעה {time}?", "alarmConfirmRestore": "להחזיר את ההתראה של המערכת הזו לשעה המקורית והנכונה?", "alarmSaving": "שומר את שינוי ההתראה הבאה…",
             "alarmCancelQueued": "ביטול ההתראה הבאה הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל מיד.", "alarmMoveQueued": "שינוי ההתראה הבאה הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל מיד.", "alarmRestoreQueued": "השחזור הוכנס לתור. יש להפעיל את קיצור הדרך של שחף כדי להחיל את שעת ההשכמה המקורית והנכונה.",
+            "alarmStateUnavailable": "מצב ההתראה העדכני אינו זמין. יש לרענן את הדף ולנסות שוב בעוד רגע.",
+            "alarmStateChanged": "ההתראה הבאה השתנתה. יש לבדוק את התאריך המעודכן ולנסות שוב.",
             "alarmError": "לא ניתן לשלוח את שינוי ההתראה. נסה שוב.", "alarmFutureTime": "יש לבחור שעה עתידית להתראה הבאה.",
             "alarmPreserved": "ההתראה הקיימת נשמרת", "alarmCancelled": "בוטלה", "alarmUnconfirmed": "לא ניתן לאשר את השינוי. יש לרענן את מצב ההתראה לפני ניסיון נוסף.", "syncChecking": "בודק עדכונים…", "syncAge": "סנכרון אחרון: {time}", "syncOld": "צריך לרענן את נתוני המערכת",
             "privatePage": "עמוד פרטי", "enterYa1Schedule": "כניסה למערכת י״א 1", "typePhrase": "הקלד את משפט הגישה כדי להמשיך.", "accessPhrase": "משפט גישה", "enter": "כניסה", "incorrectPhrase": "המשפט אינו נכון.",
@@ -1015,13 +1019,27 @@ function installAlarmSelfService() {{
   }};
   const close = () => {{ panel.hidden = true; toggle.setAttribute("aria-expanded", "false"); }};
   const submit = async (action) => {{
-    const payload = {{ action, target_date: alarmState?.next_school_day || "", command_version: alarmState?.alarm_control?.command_version || "" }};
+    if (alarmBusy) return;
+    const displayedDate = alarmState?.next_school_day || "";
+    const requestedTime = time.value;
     const messageKey = action === "clear" ? "alarmCancelQueued" : action === "restore" ? "alarmRestoreQueued" : "alarmMoveQueued";
-    if (action === "set") payload.wake_time = time.value;
     setBusy(true, action);
     alarmRevision += 1;
     feedback(tr("alarmSaving"));
     try {{
+      if (!alarmState?.alarm_control?.command_version) {{
+        // Embedded/static JSON has no DB revision. Obtain it before a write;
+        // do not relax the server's concurrency fence or silently retarget.
+        const latest = await fetchJsonTimed(publicWakeEndpoint);
+        const candidate = upcomingAlarm(latest);
+        if (!validAlarmPayload(latest) || !validAlarmPayload(candidate) || latest.stale || candidate.stale || !candidate.alarm_control?.command_version || !/^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(candidate.next_school_day || "")) throw new Error(tr("alarmStateUnavailable"));
+        alarmState = candidate;
+        alarmIsAuthoritative = true;
+        renderScheduledAlarm();
+        if (displayedDate !== candidate.next_school_day) throw new Error(tr("alarmStateChanged"));
+      }}
+      const payload = {{ action, target_date: alarmState.next_school_day, command_version: alarmState.alarm_control.command_version }};
+      if (action === "set") payload.wake_time = requestedTime;
       const body = await fetchJsonTimed(publicAlarmEndpoint, {{ method: "POST", mode: "cors", headers: {{ "content-type": "application/json" }}, body: JSON.stringify(payload) }});
       alarmRevision += 1;
       alarmIsAuthoritative = true;
@@ -1032,7 +1050,7 @@ function installAlarmSelfService() {{
       feedback(tr(messageKey));
       close();
     }} catch (error) {{
-      feedback(error.name === "AbortError" ? tr("alarmUnconfirmed") : error.message || tr("alarmError"), true);
+      feedback(error.name === "AbortError" ? tr("alarmUnconfirmed") : /command_version|target_date|alarm command changed/.test(error.message || "") ? tr("alarmStateChanged") : error.message || tr("alarmError"), true);
     }} finally {{
       setBusy(false);
       alarmRevision += 1;
