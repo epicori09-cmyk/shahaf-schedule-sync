@@ -638,7 +638,37 @@ async function localizedLiveState(html) {
   expectEqual(note.textContent, "Next lesson: Period 10", "next-lesson note preserves multi-digit period");
 }
 
+async function missingVersionPreflight(html) {
+  const app = boot(html);
+  app.document.byId("alarm-self-service-toggle").click();
+  app.document.byId("alarm-move-time").value = "08:00";
+  app.document.byId("alarm-move-today").click();
+  await flush();
+  expectFalse(app.network.requests[0].options.method === "POST", "no unversioned POST from embedded cache");
+  const latest = wake("student-profile", "07:15", "set", { alarm_control: { command_version: "fresh-command-version" } });
+  app.network.respond(0, latest);
+  await flush();
+  expectEqual(app.network.requests[1].options.method, "POST", "versioned POST follows live GET");
+  const body = JSON.parse(app.network.requests[1].options.body);
+  expectEqual(body.command_version, "fresh-command-version", "fresh version is submitted");
+  expectEqual(body.wake_time, "08:00", "typed move time survives preflight");
+}
+
+async function unavailableVersionStops(html) {
+  const app = boot(html);
+  app.document.byId("alarm-cancel-today").click();
+  await flush();
+  expectFalse(app.network.requests[0].options.method === "POST", "stale cache cannot issue cancel before GET");
+  app.network.respond(0, wake("student-profile", null, "false", { stale: true, next_school_day: null }));
+  await flush();
+  expectFalse(app.network.requests.some(r => r.options.method === "POST"), "stale tokenless data issues no alarm mutation");
+  expectTrue(alarmFeedback(app).error, "unavailable state produces visible feedback");
+  expectFalse(alarmFeedback(app).text.includes("command_version"), "internal field name is not shown");
+}
+
 const scenarios = {
+  missing_version_preflight: missingVersionPreflight,
+  unavailable_version_stops: unavailableVersionStops,
   cached_data_then_worker: cachedDataThenWorker,
   slow_pre_command_get: slowPreCommandGet,
   mismatched_and_older_refreshes: mismatchedAndOlderRefreshes,
@@ -771,6 +801,12 @@ class AlarmUiRuntimeTests(unittest.TestCase):
 
     def test_cached_embedded_alarm_refreshes_from_data_then_authoritative_worker(self) -> None:
         self.run_runtime("cached_data_then_worker")
+
+    def test_missing_version_fetches_live_state_before_post(self) -> None:
+        self.run_runtime("missing_version_preflight")
+
+    def test_stale_tokenless_feed_prevents_post_and_shows_friendly_error(self) -> None:
+        self.run_runtime("unavailable_version_stops")
 
     def test_slow_pre_command_get_cannot_overwrite_newer_command_state(self) -> None:
         self.run_runtime("slow_pre_command_get")
