@@ -11,27 +11,6 @@ async function loadWorker() {
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}#${Date.now()}-${Math.random()}`);
 }
 
-test("Cloudflare cron dispatches the existing sync and surfaces a rejected dispatch", async (t) => {
-  const { default: worker } = await loadWorker();
-  const originalFetch = global.fetch;
-  t.after(() => { global.fetch = originalFetch; });
-  const requests = [];
-  let status = 204;
-  global.fetch = async (url, options) => {
-    requests.push({ url, method: options.method, payload: JSON.parse(options.body) });
-    return new Response(null, { status });
-  };
-  const env = { GITHUB_DISPATCH_TOKEN: "test-token", GITHUB_REPO: "owner/repo", GITHUB_REF: "main" };
-  await worker.scheduled({}, env);
-  assert.deepEqual(requests, [{
-    url: "https://api.github.com/repos/owner/repo/actions/workflows/sync.yml/dispatches",
-    method: "POST",
-    payload: { ref: "main", inputs: { profile_id: "scheduled-refresh" } },
-  }]);
-  status = 403;
-  await assert.rejects(worker.scheduled({}, env), /GitHub dispatch returned HTTP 403/);
-});
-
 test("time-only Clock root cannot ring a future plan on this morning or across a long gap", async () => {
   const { applyPublicAlarmOverride } = await loadWorker();
   const future = { profile_id: "student_123", next_school_day: "2026-10-07", wake_at: "2026-10-07T06:45:00+03:00", wake_time: "06:45", shortcut_action: "set", stale: false };
@@ -218,8 +197,8 @@ test("fresh safe no-lessons roots with null target are accepted without authoriz
 
 test("applying a future cancellation preserves the current root and updates next_alarm", async () => {
   const { applyPublicAlarmOverride } = await loadWorker();
-  const currentDate = "2026-10-06";
-  const futureDate = "2026-10-07";
+  const currentDate = nextWeekdayDate(1);
+  const futureDate = nextWeekdayDate(2);
   const wake = {
     profile_id: "student_123",
     next_school_day: currentDate,
@@ -236,7 +215,7 @@ test("applying a future cancellation preserves the current root and updates next
       alarm_control: { override_active: false },
     },
   };
-  const result = applyPublicAlarmOverride(wake, { id: "future-clear", target_date: futureDate, action: "clear" }, new Date("2026-10-06T05:00:00+03:00"));
+  const result = applyPublicAlarmOverride(wake, { id: "future-clear", target_date: futureDate, action: "clear" });
   assert.equal(result.wake_time, "06:45");
   assert.equal(result.shortcut_action, "set");
   assert.equal(result.alarm_control.override_pending, true);
@@ -601,14 +580,8 @@ async function adminFixture(overrides = []) {
 test("Shortcut GET translates preserve to text false and accepts published false while keeping set/clear", async (t) => {
   const { default: worker } = await loadWorker();
   const originalFetch = global.fetch;
-  const OriginalDate = global.Date;
-  const clock = "2026-10-06T18:00:00+03:00";
-  global.Date = class extends OriginalDate {
-    constructor(...args) { super(...(args.length ? args : [clock])); }
-    static now() { return new OriginalDate(clock).getTime(); }
-  };
-  t.after(() => { global.fetch = originalFetch; global.Date = OriginalDate; });
-  const target = "2026-10-07";
+  t.after(() => { global.fetch = originalFetch; });
+  const target = nextWeekdayDate(1);
   for (const action of ["leave", "false", "set", "clear"]) {
     const envelope = { profile_id: "student_123", generated_at: new Date().toISOString(), stale: false,
       next_school_day: target, shortcut_action: action, fallback_status: "none", enabled: action === "set",

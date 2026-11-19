@@ -1,5 +1,4 @@
 name: Shahaf schedule sync
-run-name: ${{ inputs.profile_id == 'scheduled-refresh' && 'Shahaf hourly refresh (Cloudflare)' || 'Shahaf schedule sync' }}
 
 on:
   workflow_dispatch:
@@ -9,8 +8,8 @@ on:
         required: false
         type: string
   schedule:
-    # Fallback if the hourly Cloudflare trigger cannot dispatch.
-    - cron: "37 */6 * * *"
+    # Avoid GitHub's peak load at the start of each hour.
+    - cron: "56 * * * *"
       timezone: "Asia/Jerusalem"
 
 permissions:
