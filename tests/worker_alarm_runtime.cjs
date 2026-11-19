@@ -11,6 +11,27 @@ async function loadWorker() {
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}#${Date.now()}-${Math.random()}`);
 }
 
+test("Cloudflare cron dispatches the existing sync and surfaces a rejected dispatch", async (t) => {
+  const { default: worker } = await loadWorker();
+  const originalFetch = global.fetch;
+  t.after(() => { global.fetch = originalFetch; });
+  const requests = [];
+  let status = 204;
+  global.fetch = async (url, options) => {
+    requests.push({ url, method: options.method, payload: JSON.parse(options.body) });
+    return new Response(null, { status });
+  };
+  const env = { GITHUB_DISPATCH_TOKEN: "test-token", GITHUB_REPO: "owner/repo", GITHUB_REF: "main" };
+  await worker.scheduled({}, env);
+  assert.deepEqual(requests, [{
+    url: "https://api.github.com/repos/owner/repo/actions/workflows/sync.yml/dispatches",
+    method: "POST",
+    payload: { ref: "main", inputs: { profile_id: "scheduled-refresh" } },
+  }]);
+  status = 403;
+  await assert.rejects(worker.scheduled({}, env), /GitHub dispatch returned HTTP 403/);
+});
+
 test("time-only Clock root cannot ring a future plan on this morning or across a long gap", async () => {
   const { applyPublicAlarmOverride } = await loadWorker();
   const future = { profile_id: "student_123", next_school_day: "2026-10-07", wake_at: "2026-10-07T06:45:00+03:00", wake_time: "06:45", shortcut_action: "set", stale: false };
