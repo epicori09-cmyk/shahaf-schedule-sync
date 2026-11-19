@@ -1,4 +1,5 @@
 name: Shahaf schedule sync
+run-name: ${{ inputs.profile_id == 'scheduled-refresh' && 'Shahaf hourly refresh (Cloudflare)' || 'Shahaf schedule sync' }}
 
 on:
   workflow_dispatch:
@@ -8,9 +9,8 @@ on:
         required: false
         type: string
   schedule:
-    # Check Shahaf changes at the start of every hour. The timezone keeps the
-    # schedule aligned with Israel's daylight-saving transitions.
-    - cron: "0 * * * *"
+    # Fallback if the hourly Cloudflare trigger cannot dispatch.
+    - cron: "37 */6 * * *"
       timezone: "Asia/Jerusalem"
 
 permissions:

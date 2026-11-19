@@ -218,8 +218,8 @@ test("fresh safe no-lessons roots with null target are accepted without authoriz
 
 test("applying a future cancellation preserves the current root and updates next_alarm", async () => {
   const { applyPublicAlarmOverride } = await loadWorker();
-  const currentDate = nextWeekdayDate(1);
-  const futureDate = nextWeekdayDate(2);
+  const currentDate = "2026-10-06";
+  const futureDate = "2026-10-07";
   const wake = {
     profile_id: "student_123",
     next_school_day: currentDate,
@@ -236,7 +236,7 @@ test("applying a future cancellation preserves the current root and updates next
       alarm_control: { override_active: false },
     },
   };
-  const result = applyPublicAlarmOverride(wake, { id: "future-clear", target_date: futureDate, action: "clear" });
+  const result = applyPublicAlarmOverride(wake, { id: "future-clear", target_date: futureDate, action: "clear" }, new Date("2026-10-06T05:00:00+03:00"));
   assert.equal(result.wake_time, "06:45");
   assert.equal(result.shortcut_action, "set");
   assert.equal(result.alarm_control.override_pending, true);
@@ -601,8 +601,14 @@ async function adminFixture(overrides = []) {
 test("Shortcut GET translates preserve to text false and accepts published false while keeping set/clear", async (t) => {
   const { default: worker } = await loadWorker();
   const originalFetch = global.fetch;
-  t.after(() => { global.fetch = originalFetch; });
-  const target = nextWeekdayDate(1);
+  const OriginalDate = global.Date;
+  const clock = "2026-10-06T18:00:00+03:00";
+  global.Date = class extends OriginalDate {
+    constructor(...args) { super(...(args.length ? args : [clock])); }
+    static now() { return new OriginalDate(clock).getTime(); }
+  };
+  t.after(() => { global.fetch = originalFetch; global.Date = OriginalDate; });
+  const target = "2026-10-07";
   for (const action of ["leave", "false", "set", "clear"]) {
     const envelope = { profile_id: "student_123", generated_at: new Date().toISOString(), stale: false,
       next_school_day: target, shortcut_action: action, fallback_status: "none", enabled: action === "set",

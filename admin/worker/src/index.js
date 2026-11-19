@@ -1112,6 +1112,10 @@ const alarmDashboardEnhancements = `<script>
 })();</script>`;
 
 export default {
+  async scheduled(_event, env) {
+    await triggerPublish(env, "scheduled-refresh");
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/") return new Response(dashboardHtml.replace("</body></html>", dashboardEnhancements + "</body></html>"), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
